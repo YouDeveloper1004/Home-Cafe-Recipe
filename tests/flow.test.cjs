@@ -1,0 +1,113 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const Module=require('node:module');
+const fs=require('node:fs');
+const ts=require('typescript');
+const React=require('react');
+const {create,act}=require('react-test-renderer');
+global.IS_REACT_ACT_ENVIRONMENT=true;
+const store=new Map(); let rejectSave=false;
+const native={};
+for(const name of ['KeyboardAvoidingView','Pressable','ScrollView','Image','Text','TextInput','View'])native[name]=name;
+Object.assign(native,{Platform:{OS:'ios'},StyleSheet:{create:x=>x},Alert:{alert:()=>{}},Vibration:{vibrate:()=>{}},Share:{share:async()=>{}},BackHandler:{addEventListener:()=>({remove(){}})},AppState:{currentState:'active',addEventListener:()=>({remove(){}})}});
+const originalLoad=Module._load;
+Module._load=function(name,parent,main){
+  if(name==='react-native')return native;
+  if(name==='react-native-safe-area-context')return {SafeAreaProvider:'View',SafeAreaView:'View'};
+  if(name==='expo-status-bar')return {StatusBar:'View'};
+  if(name==='expo-keep-awake')return {useKeepAwake:()=>{}};
+  if(name==='expo-video')return {useVideoPlayer:()=>({}),VideoView:'VideoView'};
+  if(name==='expo-image-picker')return {};
+  if(name==='expo-file-system')return {};
+  if(name==='@react-native-async-storage/async-storage')return {getItem:async k=>store.get(k)??null,setItem:async(k,v)=>{if(rejectSave)throw new Error('disk full');store.set(k,v);}};
+  if(name==='./cloud')return {cloud:null,catalog:async()=>({cafes:[],recipes:[]})};
+  return originalLoad.call(this,name,parent,main);
+};
+for(const ext of ['.ts','.tsx'])require.extensions[ext]=(module,path)=>{
+  module._compile(ts.transpileModule(fs.readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText,path);
+};
+require.extensions['.png']=(module)=>{module.exports=1;};
+require.extensions['.jpg']=(module)=>{module.exports=1;};
+const App=require('../CafeApp.tsx').default;
+const text=node=>typeof node==='string'?node:Array.isArray(node)?node.map(text).join(''):node?.children?node.children.map(text).join(''):'';
+let ui;
+const press=async label=>{
+  const matches=ui.root.findAll(x=>x.type==='Pressable'&&text(x).includes(label));
+  assert.ok(matches.length,`button missing: ${label}`);
+  const target=matches.sort((a,b)=>text(a).length-text(b).length)[0];
+  await act(async()=>{await target.props.onPress();});
+};
+const input=async(placeholder,value)=>{const field=ui.root.findAll(x=>x.type==='TextInput'&&x.props.placeholder===placeholder)[0];assert.ok(field,placeholder);await act(async()=>field.props.onChangeText(value));};
+test('disabled Apple login is not exposed in the app',()=>{
+  const source=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
+  assert.doesNotMatch(source,/Apple로 (계속하기|로그인)/);
+  assert.match(source,/Google로 계속하기/);
+});
+test('step photos and short videos are wired through editor, player and cloud upload',()=>{
+  const creator=fs.readFileSync(require.resolve('../creator.tsx'),'utf8');
+  const app=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
+  const cloudSource=fs.readFileSync(require.resolve('../cloud.ts'),'utf8');
+  assert.match(creator,/사진 추가/);assert.match(creator,/30초 영상/);
+  assert.match(app,/StepMediaView/);assert.match(app,/VideoView/);
+  assert.match(cloudSource,/step\.media/);assert.match(cloudSource,/10\*1024\*1024/);
+});
+test('recipe editor offers a complete image-backed test recipe',()=>{
+  const creator=fs.readFileSync(require.resolve('../creator.tsx'),'utf8');
+  assert.match(creator,/예시로 빠르게 시작하기/);
+  assert.match(creator,/SHOW_TEST_FILL/);
+  assert.match(creator,/honey-apricot-cover\.jpg/);
+  assert.match(creator,/honey-apricot-grind\.jpg/);
+  assert.match(creator,/honey-apricot-bloom\.jpg/);
+  assert.match(creator,/type: 'timer'/);
+  assert.match(creator,/setSteps\(\[/);
+});
+test('recipe editor exposes the four-step ratio registration structure',()=>{
+  const creator=fs.readFileSync(require.resolve('../creator.tsx'),'utf8');
+  assert.match(creator,/FLOW_LABELS = \['기본 정보', '재료·원두', '단계 추가', '최종 확인'\]/);
+  assert.match(creator,/기준 컵 사이즈 \(ml\) · 필수/);
+  assert.match(creator,/baseVolumeMl: Number\(baseVolumeMl\)/);
+  assert.match(creator,/원두 특성/);assert.match(creator,/기준 용량과 계량값/);
+  assert.match(creator,/프릳츠 아니 온두라스/);assert.match(creator,/배전도/);
+  assert.match(creator,/미리보기/);assert.match(creator,/직접 입력/);
+});
+test('search input keeps Korean IME composition in the native text field',()=>{
+  const source=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
+  assert.match(source,/function SearchField/);
+  assert.match(source,/defaultValue=\{initialValue\}/);
+  assert.match(source,/keyboardType="default"/);
+});
+test('create Cafe, publish, open actual recipe, save, brew, review and restore after restart',async()=>{
+  await act(async()=>{ui=create(React.createElement(App));});
+  await press('내 Cafe');await input('사용할 이름','테스트 브루어');await press('로컬 프로필로 시작');
+  await press('Cafe 만들기');await input('예: 승문의 커피','테스트 Cafe');await input('seungmooncoffee','testcafe');await input('어떤 커피와 레시피를 나누고 싶나요?','테스트 소개');await press('내 Cafe 열기');
+  await press('새 레시피');assert.ok(text(ui.toJSON()).includes('표지 사진 추가'));assert.ok(!text(ui.toJSON()).includes('예시로 빠르게 시작하기'));await input('예: 복숭아처럼 산뜻한 V60','테스트 커피');await input('이 레시피의 맛과 포인트를 알려주세요','내가 만든 추출');
+  await press('재료와 원두 입력');assert.ok(text(ui.toJSON()).includes('기준 컵 사이즈'));
+  await input('예: 프릳츠 아니 온두라스','케냐 키암부 AA');await input('예: 프릳츠','오후의 로스터스');
+  await press('단계 만들기');assert.ok(text(ui.toJSON()).includes('30초 영상'));assert.ok(text(ui.toJSON()).includes('단계 1 만들기'));
+  await input('설명 (선택) · 예: 물을 천천히 부어 주세요','커피를 준비해요');await press('이 단계 저장');assert.ok(text(ui.toJSON()).includes('단계 2 만들기'));
+  await press('타이머 설정');await input('설명 (선택) · 예: 커피가 부풀기를 기다려요','잠시 기다려요');await input('예: 30초','1초');await press('이 단계 저장');
+  await press('단계 입력 마치기');assert.ok(text(ui.toJSON()).includes('게시 전 확인'));await press('레시피 게시하기');
+  assert.ok(text(ui.toJSON()).includes('테스트 커피'));
+  await press('테스트 커피');assert.ok(text(ui.toJSON()).includes('내가 만든 추출'));assert.ok(text(ui.toJSON()).includes('케냐 키암부 AA'));
+  await press('저장 ♡');await press('따라 내리기');
+  assert.ok(text(ui.toJSON()).includes('커피를 준비해요'));
+  await new Promise(resolve=>setTimeout(resolve,510));
+  await act(async()=>ui.root.findByProps({testID:'brew-next'}).props.onPress());
+  assert.ok(text(ui.toJSON()).includes('잠시 기다려요'));
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,1150));});
+  assert.ok(text(ui.toJSON()).includes('멋지게 내렸어요!'));
+  await input('산미, 단맛, 다음번에 바꾸고 싶은 점','단맛이 좋음');await press('맛 기록 저장');
+  assert.ok(text(ui.toJSON()).includes('단맛이 좋음'));
+  await act(async()=>ui.unmount());
+  await act(async()=>{ui=create(React.createElement(App));});
+  await press('내 Cafe');assert.ok(text(ui.toJSON()).includes('테스트 Cafe'));assert.ok(text(ui.toJSON()).includes('단맛이 좋음'));
+  await press('테스트 커피');await press('테스트 Cafe');await press('테스트 커피');await press('‹ 뒤로');await press('‹ 뒤로');
+  assert.ok(text(ui.toJSON()).includes('내 추출 기록'),'Cafe back should reach profile, not another recipe');
+  await act(async()=>ui.unmount());
+});
+test('failed storage write does not show a successful account',async()=>{
+  store.clear();rejectSave=true;
+  await act(async()=>{ui=create(React.createElement(App));});await press('내 Cafe');await input('사용할 이름','실패 테스트');await press('로컬 프로필로 시작');
+  assert.ok(text(ui.toJSON()).includes('로컬 프로필로 시작'));assert.equal(store.size,0);
+  rejectSave=false;await act(async()=>ui.unmount());
+});
