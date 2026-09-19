@@ -49,7 +49,7 @@ Google은 PKCE로 인증하고 Apple은 네이티브 identity token을 Supabase�
 
 코드는 준비되어 있지만 다음 콘솔 설정은 앱 소유자가 직접 완료해야 합니다.
 
-유료 Apple Developer 설정이 끝나기 전에는 `.env.local`의 `EXPO_PUBLIC_APPLE_LOGIN_ENABLED`를 `false`로 유지합니다. `app.config.js`는 이 값으로 `ios.usesAppleSignIn`과 로그인 UI를 함께 제어합니다. EAS `preview`는 `false`, `production`은 `true`로 고정되어 있어 무료 개발 빌드와 출시 빌드가 섞이지 않습니다. Google 로그인을 제공하는 iOS 앱은 심사 전에 Apple 로그인을 동등하게 제공하거나 iOS의 제3자 소셜 로그인을 제거해야 합니다.
+유료 Apple Developer 설정이 끝나기 전에는 `.env.local`의 `EXPO_PUBLIC_APPLE_LOGIN_ENABLED`를 `false`로 유지합니다. `app.config.js`는 이 값으로 `ios.usesAppleSignIn`과 로그인 UI를 함께 제어합니다. EAS `preview`는 `false`, `production`은 `true`로 고정되어 있으며 `eas-build-post-install`이 실제 Xcode entitlement 파일도 동기화해 무료 개발 빌드와 출시 빌드가 섞이지 않습니다. Google 로그인을 제공하는 iOS 앱은 심사 전에 Apple 로그인을 동등하게 제공하거나 iOS의 제3자 소셜 로그인을 제거해야 합니다.
 
 1. Apple Developer에서 앱의 Bundle ID `com.seungmunyou.caferecipes`에 **Sign in with Apple** capability를 켭니다.
 2. Apple Developer의 Certificates, Identifiers & Profiles에서 Sign in with Apple용 Services ID와 Key를 만들고 Team ID, Key ID, 내려받은 `.p8` 키를 안전하게 보관합니다. 키는 다시 내려받을 수 없고 저장소에 커밋하면 안 됩니다.

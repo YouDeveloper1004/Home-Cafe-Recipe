@@ -2,6 +2,9 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const Module=require('node:module');
 const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const {spawnSync}=require('node:child_process');
 const ts=require('typescript');
 const React=require('react');
 const {create,act}=require('react-test-renderer');
@@ -97,10 +100,20 @@ test('Apple account deletion reauthenticates, revokes the provider token, remove
 });
 test('release configuration exposes Apple sign-in only in the production build',()=>{
   const config=fs.readFileSync(require.resolve('../app.config.js'),'utf8');
+  const entitlementHook=fs.readFileSync(require.resolve('../scripts/configure-apple-entitlement.js'),'utf8');
+  const pkg=JSON.parse(fs.readFileSync(require.resolve('../package.json'),'utf8'));
   const eas=JSON.parse(fs.readFileSync(require.resolve('../eas.json'),'utf8'));
   assert.match(config,/ios:\{\.\.\.config\.ios,usesAppleSignIn:appleLoginEnabled\}/);
+  assert.match(entitlementHook,/com\.apple\.developer\.applesignin/);
+  assert.equal(pkg.scripts['eas-build-post-install'],'node scripts/configure-apple-entitlement.js');
   assert.equal(eas.build.preview.env.EXPO_PUBLIC_APPLE_LOGIN_ENABLED,'false');
   assert.equal(eas.build.production.env.EXPO_PUBLIC_APPLE_LOGIN_ENABLED,'true');
+  const fixture=path.join(os.tmpdir(),`ratio-entitlements-${process.pid}.plist`);
+  fs.writeFileSync(fixture,'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>');
+  const hook=spawnSync(process.execPath,[require.resolve('../scripts/configure-apple-entitlement.js')],{env:{...process.env,RATIO_ENTITLEMENTS_PATH:fixture,EXPO_PUBLIC_APPLE_LOGIN_ENABLED:'true',EAS_BUILD_PLATFORM:'ios'}});
+  assert.equal(hook.status,0,hook.stderr.toString());
+  assert.match(fs.readFileSync(fixture,'utf8'),/<key>com\.apple\.developer\.applesignin<\/key>/);
+  fs.unlinkSync(fixture);
 });
 test('support is directly reachable in-app and no advertising or tracking SDK is configured',()=>{
   const app=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
