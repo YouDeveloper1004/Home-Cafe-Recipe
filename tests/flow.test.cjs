@@ -19,8 +19,10 @@ Module._load=function(name,parent,main){
   if(name==='expo-video')return {useVideoPlayer:()=>({}),VideoView:'VideoView'};
   if(name==='expo-image-picker')return {};
   if(name==='expo-file-system')return {};
-  if(name==='@react-native-async-storage/async-storage')return {getItem:async k=>store.get(k)??null,setItem:async(k,v)=>{if(rejectSave)throw new Error('disk full');store.set(k,v);}};
-  if(name==='./cloud')return {cloud:null,catalog:async()=>({cafes:[],recipes:[]})};
+  if(name==='expo-crypto')return {getRandomBytesAsync:async()=>new Uint8Array(32),digestStringAsync:async()=>'',CryptoDigestAlgorithm:{SHA256:'SHA-256'}};
+  if(name==='expo-apple-authentication')return {AppleAuthenticationButton:'AppleAuthenticationButton',AppleAuthenticationButtonType:{SIGN_IN:0},AppleAuthenticationButtonStyle:{BLACK:0},AppleAuthenticationScope:{FULL_NAME:0,EMAIL:1},signInAsync:async()=>({identityToken:'test-token'})};
+  if(name==='@react-native-async-storage/async-storage')return {getItem:async k=>store.get(k)??null,setItem:async(k,v)=>{if(rejectSave)throw new Error('disk full');store.set(k,v);},removeItem:async k=>store.delete(k)};
+  if(name==='./cloud')return {cloud:null,catalog:async()=>({cafes:[],recipes:[]}),loadBlockedOwnerIds:async()=>[],loadRecipeModerationStatuses:async()=>({}),reportContent:async()=>{},blockOwner:async()=>{},unblockOwner:async()=>{}};
   return originalLoad.call(this,name,parent,main);
 };
 for(const ext of ['.ts','.tsx'])require.extensions[ext]=(module,path)=>{
@@ -29,6 +31,7 @@ for(const ext of ['.ts','.tsx'])require.extensions[ext]=(module,path)=>{
 require.extensions['.png']=(module)=>{module.exports=1;};
 require.extensions['.jpg']=(module)=>{module.exports=1;};
 const App=require('../CafeApp.tsx').default;
+const {isAtLeast14}=require('../legal.ts');
 const text=node=>typeof node==='string'?node:Array.isArray(node)?node.map(text).join(''):node?.children?node.children.map(text).join(''):'';
 let ui;
 const press=async label=>{
@@ -38,10 +41,46 @@ const press=async label=>{
   await act(async()=>{await target.props.onPress();});
 };
 const input=async(placeholder,value)=>{const field=ui.root.findAll(x=>x.type==='TextInput'&&x.props.placeholder===placeholder)[0];assert.ok(field,placeholder);await act(async()=>field.props.onChangeText(value));};
-test('disabled Apple login is not exposed in the app',()=>{
+const completeConsent=async()=>{await input('생년월일 (YYYY-MM-DD)','1990-01-01');await press('이용약관에 동의합니다');await press('개인정보 수집·이용에 동의합니다');};
+test('Apple login and required legal consent are exposed in the app',()=>{
   const source=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
-  assert.doesNotMatch(source,/Apple로 (계속하기|로그인)/);
+  assert.match(source,/AppleAuthenticationButton/);
   assert.match(source,/Google로 계속하기/);
+  assert.match(source,/이용약관에 동의합니다/);
+  assert.match(source,/개인정보 수집·이용에 동의합니다/);
+  assert.match(source,/개인정보 국외 이전에 동의합니다/);
+  assert.match(source,/만 14세 이상만 가입/);
+});
+test('under-14 users are rejected and invalid dates do not pass',()=>{
+  const now=new Date('2026-09-18T12:00:00Z');
+  assert.equal(isAtLeast14('2012-09-18',now),true);
+  assert.equal(isAtLeast14('2012-09-19',now),false);
+  assert.equal(isAtLeast14('2012-02-31',now),false);
+  assert.equal(isAtLeast14('not-a-date',now),false);
+});
+test('release schema keeps reports private and account deletion waits for storage removal',()=>{
+  const schema=fs.readFileSync(require.resolve('../supabase/migrations/20260918_release_readiness.sql'),'utf8');
+  const cloudSource=fs.readFileSync(require.resolve('../cloud.ts'),'utf8');
+  assert.match(schema,/grant insert on public\.reports to authenticated/);
+  assert.doesNotMatch(schema,/grant[^;]*select[^;]*public\.reports/i);
+  assert.match(schema,/auth\.uid\(\) = blocker_id/);
+  assert.match(schema,/storage\.foldername\(name\)/);
+  assert.ok(cloudSource.indexOf("storage.from('recipe-images').remove")<cloudSource.indexOf("rpc('delete_cafe_account')"));
+});
+test('moderation migration holds changed recipes for review and rate-limits reports',()=>{
+  const migration=fs.readFileSync(require.resolve('../supabase/migrations/20260918_moderation_privacy.sql'),'utf8');
+  assert.match(migration,/create table if not exists public\.recipe_moderation/);
+  assert.match(migration,/status text not null default 'pending'/);
+  assert.match(migration,/moderation\.status='approved'/);
+  assert.match(migration,/Too many reports/);
+  assert.match(migration,/Already reported/);
+  assert.match(migration,/External links are not allowed/);
+});
+test('public store policy pages include privacy and account deletion instructions',()=>{
+  const privacy=fs.readFileSync(require.resolve('../docs/privacy.html'),'utf8');
+  const deletion=fs.readFileSync(require.resolve('../docs/delete-account.html'),'utf8');
+  assert.match(privacy,/us-east-1/);assert.match(privacy,/Supabase, Inc\./);
+  assert.match(deletion,/온라인 계정 삭제/);assert.match(deletion,/mailto:/);
 });
 test('step photos and short videos are wired through editor, player and cloud upload',()=>{
   const creator=fs.readFileSync(require.resolve('../creator.tsx'),'utf8');
@@ -78,7 +117,7 @@ test('search input keeps Korean IME composition in the native text field',()=>{
 });
 test('create Cafe, publish, open actual recipe, save, brew, review and restore after restart',async()=>{
   await act(async()=>{ui=create(React.createElement(App));});
-  await press('내 Cafe');await input('사용할 이름','테스트 브루어');await press('로컬 프로필로 시작');
+  await press('내 Cafe');await completeConsent();await input('사용할 이름','테스트 브루어');await press('로컬 프로필로 시작');
   await press('Cafe 만들기');await input('예: 승문의 커피','테스트 Cafe');await input('seungmooncoffee','testcafe');await input('어떤 커피와 레시피를 나누고 싶나요?','테스트 소개');await press('내 Cafe 열기');
   await press('새 레시피');assert.ok(text(ui.toJSON()).includes('표지 사진 추가'));assert.ok(!text(ui.toJSON()).includes('예시로 빠르게 시작하기'));await input('예: 복숭아처럼 산뜻한 V60','테스트 커피');await input('이 레시피의 맛과 포인트를 알려주세요','내가 만든 추출');
   await press('재료와 원두 입력');assert.ok(text(ui.toJSON()).includes('기준 컵 사이즈'));
@@ -107,7 +146,7 @@ test('create Cafe, publish, open actual recipe, save, brew, review and restore a
 });
 test('failed storage write does not show a successful account',async()=>{
   store.clear();rejectSave=true;
-  await act(async()=>{ui=create(React.createElement(App));});await press('내 Cafe');await input('사용할 이름','실패 테스트');await press('로컬 프로필로 시작');
+  await act(async()=>{ui=create(React.createElement(App));});await press('내 Cafe');await completeConsent();await input('사용할 이름','실패 테스트');await press('로컬 프로필로 시작');
   assert.ok(text(ui.toJSON()).includes('로컬 프로필로 시작'));assert.equal(store.size,0);
   rejectSave=false;await act(async()=>ui.unmount());
 });

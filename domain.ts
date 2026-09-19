@@ -5,8 +5,8 @@ export type BeanRecommendation = { product: string; roaster?: string; origin?: s
 export type Cafe = { id: string; name: string; handle: string; bio: string; color: string };
 export type Recipe = { id: string; title: string; description: string; equipment: string; beans: string; bean?: BeanRecommendation; baseVolumeMl: number; water: string; temperature: string; duration: string; steps: Step[]; publishedAt: string; photo?: string; cafeId?: string };
 export type Review = { id: string; recipeId: string; title: string; rating: number; note: string; date: string };
-export type Data = { cafe: Cafe | null; recipes: Recipe[]; draft: Recipe | null; saved: string[]; following: string[]; reviews: Review[]; name: string; active: boolean };
-export const emptyData: Data = { cafe: null, recipes: [], draft: null, saved: [], following: [], reviews: [], name: '', active: false };
+export type Data = { cafe: Cafe | null; recipes: Recipe[]; draft: Recipe | null; saved: string[]; following: string[]; reviews: Review[]; name: string; active: boolean; legalAcceptedAt: string; termsAcceptedAt: string; privacyAcceptedAt: string; overseasTransferAcceptedAt: string; ageConfirmedAt: string };
+export const emptyData: Data = { cafe: null, recipes: [], draft: null, saved: [], following: [], reviews: [], name: '', active: false, legalAcceptedAt: '', termsAcceptedAt: '', privacyAcceptedAt: '', overseasTransferAcceptedAt: '', ageConfirmedAt: '' };
 export function seconds(value: string): number {
   const text = value.trim();
   if (/^\d{1,2}:[0-5]\d$/.test(text)) { const [m, s] = text.split(':').map(Number); return m * 60 + s; }
@@ -38,7 +38,7 @@ export function validateRecipe(r: Recipe): string | null {
   if (r.steps.some(s => s.type === 'timer' && (seconds(s.value) < 1 || seconds(s.value) > 3600))) return '대기 시간은 1~3600초로 입력해 주세요.';
   return null;
 }
-export type Route = { screen: 'home' | 'search' | 'saved' | 'profile' | 'cafe' | 'detail' | 'brew' | 'review' | 'createCafe' | 'editor' | 'settings'; id?: string };
+export type Route = { screen: 'home' | 'search' | 'saved' | 'profile' | 'cafe' | 'detail' | 'brew' | 'review' | 'createCafe' | 'editor' | 'settings' | 'legal'; id?: string };
 export function back(stack: Route[]): Route[] {
   if (stack.at(-1)?.screen === 'cafe') {
     const index = stack.findLastIndex(r => ['home','search','saved','profile'].includes(r.screen));

@@ -56,11 +56,90 @@ using (bucket_id='recipe-images' and (storage.foldername(name))[1]=auth.uid()::t
 create policy "own image listing" on storage.objects for select to authenticated
 using (bucket_id='recipe-images' and (storage.foldername(name))[1]=auth.uid()::text);
 
+-- Release-readiness migration: reports are write-only to users. Service-role users
+-- can review them in the Supabase dashboard because service-role bypasses RLS.
+create table public.reports (
+  id uuid primary key default gen_random_uuid(),
+  reporter_id uuid not null references auth.users(id) on delete cascade,
+  target_type text not null check (target_type in ('cafe','recipe')),
+  target_id text not null check (length(target_id) between 1 and 200),
+  reason text not null check (reason in ('스팸','부적절한 콘텐츠','저작권 침해','기타')),
+  status text not null default 'open' check (status in ('open','resolved','dismissed')),
+  review_note text,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table public.reports enable row level security;
+revoke all on public.reports from anon, authenticated;
+create unique index reports_one_open_target_idx
+  on public.reports(reporter_id,target_type,target_id) where status='open';
+
+create function public.submit_report(report_target_type text, report_target_id text, report_reason text)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare uid uuid := auth.uid(); created_id uuid;
+begin
+  if uid is null then raise exception 'Sign in required'; end if;
+  if report_target_type not in ('cafe','recipe')
+    or length(report_target_id) not between 1 and 200
+    or report_reason not in ('스팸','부적절한 콘텐츠','저작권 침해','기타')
+  then raise exception 'Invalid report'; end if;
+  if report_target_type='cafe' and not exists(
+    select 1 from public.cafe_catalog where owner_id::text=report_target_id
+  ) then raise exception 'Target not found'; end if;
+  if report_target_type='recipe' and not exists(
+    select 1 from public.cafe_catalog as catalog
+    cross join lateral jsonb_array_elements(catalog.recipes) as recipe(value)
+    where recipe.value->>'id'=report_target_id
+  ) then raise exception 'Target not found'; end if;
+  if (select count(*) from public.reports where reporter_id=uid
+      and created_at>now()-interval '1 hour') >= 10
+  then raise exception 'Too many reports. Try again later.'; end if;
+  if exists(select 1 from public.reports where reporter_id=uid
+      and target_type=report_target_type and target_id=report_target_id and status='open')
+  then raise exception 'Already reported'; end if;
+  insert into public.reports(reporter_id,target_type,target_id,reason)
+  values(uid,report_target_type,report_target_id,report_reason)
+  returning id into created_id;
+  return created_id;
+end $$;
+revoke all on function public.submit_report(text,text,text) from public, anon;
+grant execute on function public.submit_report(text,text,text) to authenticated;
+
+create table public.blocks (
+  blocker_id uuid not null references auth.users(id) on delete cascade,
+  blocked_owner_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (blocker_id, blocked_owner_id),
+  check (blocker_id <> blocked_owner_id)
+);
+alter table public.blocks enable row level security;
+create policy "read own blocks" on public.blocks for select to authenticated using (auth.uid() = blocker_id);
+create policy "create own blocks" on public.blocks for insert to authenticated with check (auth.uid() = blocker_id);
+create policy "delete own blocks" on public.blocks for delete to authenticated using (auth.uid() = blocker_id);
+revoke all on public.blocks from anon, authenticated;
+grant select, insert, delete on public.blocks to authenticated;
+
+-- The client passes these exact names to the Storage API, which removes both the
+-- physical objects and their metadata. Returning names also covers future nested folders.
+create function public.cafe_account_storage_paths() returns table(name text)
+language sql security definer set search_path = '' stable as $$
+  select objects.name from storage.objects as objects
+  where objects.bucket_id='recipe-images'
+    and (storage.foldername(objects.name))[1]=auth.uid()::text
+$$;
+revoke all on function public.cafe_account_storage_paths() from public, anon;
+grant execute on function public.cafe_account_storage_paths() to authenticated;
+
 create function public.delete_cafe_account() returns void
 language plpgsql security definer set search_path = '' as $$
+declare uid uuid := auth.uid();
 begin
-  if auth.uid() is null then raise exception 'Sign in required'; end if;
-  delete from auth.users where id=auth.uid();
+  if uid is null then raise exception 'Sign in required'; end if;
+  -- Storage API deletion happens first in the client. This removes any leftover
+  -- metadata before deleting the user and makes public URLs return 404.
+  delete from storage.objects
+  where bucket_id='recipe-images' and (storage.foldername(name))[1]=uid::text;
+  delete from auth.users where id=uid;
 end $$;
 revoke all on function public.delete_cafe_account() from public, anon;
 grant execute on function public.delete_cafe_account() to authenticated;

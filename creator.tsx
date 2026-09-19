@@ -354,7 +354,7 @@ export function CreateRecipeScreen({ cafe, onBack, onPublish, onDraft, initial, 
   }
   async function pickPhoto() {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [4,3] });
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7, allowsEditing: true, aspect: [4,3], exif: false });
       if (!result.canceled) {
         const source = new File(result.assets[0].uri);
         const destination = new File(Paths.document, `recipe-${Date.now()}${source.extension || '.jpg'}`);
@@ -370,8 +370,8 @@ export function CreateRecipeScreen({ cafe, onBack, onPublish, onDraft, initial, 
         if (!permission.granted) return setError('영상을 선택하려면 사진 보관함 권한이 필요해요.');
       }
       const result = await ImagePicker.launchImageLibraryAsync(type === 'image'
-        ? { mediaTypes: ['images'], quality: 0.75, allowsEditing: true, aspect: [16,9] }
-        : { mediaTypes: ['videos'], allowsEditing: false, videoMaxDuration: 30 });
+        ? { mediaTypes: ['images'], quality: 0.75, allowsEditing: true, aspect: [16,9], exif: false }
+        : { mediaTypes: ['videos'], allowsEditing: false, videoMaxDuration: 30, videoExportPreset: ImagePicker.VideoExportPreset.MediumQuality });
       if (result.canceled) return;
       const asset = result.assets[0];
       if (type === 'video' && (asset.duration ?? 0) > 30000) return setError('단계 영상은 30초 이하로 선택해 주세요.');

@@ -2,15 +2,18 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, BackHandler, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CreateCafeScreen, CreateRecipeScreen } from './creator';
 import { back, Cafe, Data, emptyData, normalizeRecipe, Recipe, Route, sampleCafes, sampleRecipes, scaleRecipe, seconds, StepMedia } from './domain';
-import { catalog, cloud, deleteAccount, loadAccount, login, saveAccount } from './cloud';
+import { blockOwner, catalog, cloud, deleteAccount, loadAccount, loadBlockedOwnerIds, loadRecipeModerationStatuses, login, LoginProvider, ModerationStatus, reportContent, ReportReason, saveAccount, unblockOwner } from './cloud';
+import { COMMUNITY_GUIDELINES, isAtLeast14, OVERSEAS_TRANSFER_NOTICE, PRIVACY_POLICY, SUPPORT_EMAIL, TERMS_OF_SERVICE } from './legal';
 import type { Session } from '@supabase/supabase-js';
 
 const KEY = '@cafe/app/v2';
+const appleLoginEnabled=process.env.EXPO_PUBLIC_APPLE_LOGIN_ENABLED==='true';
 const paper = '#F7F1E8', orange = '#B8674B', ink = '#2B241F';
 const sampleRecipeImages: Record<string, number> = {
   'sample-v60': require('./assets/samples/v60-peach.png'),
@@ -23,6 +26,9 @@ function Button({title,onPress,quiet=false,disabled=false}: {title:string;onPres
 }
 function Field({value,onChange,placeholder,multiline=false}: {value:string;onChange:(v:string)=>void;placeholder:string;multiline?:boolean}) {
   return <TextInput accessibilityLabel={placeholder} placeholder={placeholder} placeholderTextColor="#91867D" value={value} onChangeText={onChange} multiline={multiline} style={[s.input,multiline&&{minHeight:95,textAlignVertical:'top'}]} />;
+}
+function Consent({checked,onPress,label}: {checked:boolean;onPress:()=>void;label:string}) {
+  return <Pressable accessibilityRole="checkbox" accessibilityState={{checked}} onPress={onPress} style={s.consentRow}><Text style={s.checkbox}>{checked?'✓':' '}</Text><Text style={s.consentText}>{label}</Text></Pressable>;
 }
 function SearchField({initialValue,onChange}: {initialValue:string;onChange:(v:string)=>void}) {
   return <View style={s.searchField}><Text style={s.searchIcon}>⌕</Text><TextInput
@@ -107,7 +113,10 @@ function Brew({recipe,onExit,onDone}: {recipe:Recipe;onExit:()=>void;onDone:()=>
 function Application() {
   const [data,setData]=useState<Data>(emptyData), [loaded,setLoaded]=useState(false), [loadError,setLoadError]=useState('');
   const [session,setSession]=useState<Session|null>(null), [authBusy,setAuthBusy]=useState(false);
+  const [legalGate,setLegalGate]=useState(false);
   const [remote,setRemote]=useState<{cafes:Cafe[];recipes:Recipe[]}>({cafes:[],recipes:[]});
+  const [blockedOwners,setBlockedOwners]=useState<string[]>([]);
+  const [moderation,setModeration]=useState<Record<string,ModerationStatus>>({});
   const dataRef=useRef(data), saving=useRef(false);
   const [stack,setStack]=useState<Route[]>([{screen:'home'}]);
   const route=stack[stack.length-1];
@@ -115,7 +124,12 @@ function Application() {
   const [rating,setRating]=useState(5), [note,setNote]=useState('');
   const [cafeTab,setCafeTab]=useState('레시피'), [latest,setLatest]=useState(true);
   const [cupSelection,setCupSelection]=useState<{recipeId:string;volumeMl:number}|null>(null);
-  const recipes=[...data.recipes,...remote.recipes.filter(r=>r.cafeId!==data.cafe?.id),...sampleRecipes], cafes=[...sampleCafes,...remote.cafes.filter(c=>c.id!==data.cafe?.id),...(data.cafe?[data.cafe]:[])];
+  const [termsAccepted,setTermsAccepted]=useState(false), [privacyAccepted,setPrivacyAccepted]=useState(false);
+  const [overseasAccepted,setOverseasAccepted]=useState(false), [birthDate,setBirthDate]=useState('');
+  const allRecipes=[...data.recipes,...remote.recipes.filter(r=>r.cafeId!==data.cafe?.id),...sampleRecipes];
+  const allCafes=[...sampleCafes,...remote.cafes.filter(c=>c.id!==data.cafe?.id),...(data.cafe?[data.cafe]:[])];
+  const recipes=allRecipes.filter(r=>!r.cafeId||!blockedOwners.includes(r.cafeId));
+  const cafes=allCafes.filter(c=>!blockedOwners.includes(c.id));
   const recipe=recipes.find(r=>r.id===route.id), cafe=cafes.find(c=>c.id===route.id);
   const owner=(r:Recipe)=>cafes.find(c=>c.id===r.cafeId)??data.cafe??sampleCafes[0];
   const selectedVolume=(r:Recipe)=>cupSelection?.recipeId===r.id?cupSelection.volumeMl:r.baseVolumeMl;
@@ -139,7 +153,11 @@ function Application() {
         if(cloud) {
           const restored=await cloud.auth.getSession();
           if(restored.error)throw restored.error;
-          if(restored.data.session){next=await loadAccount(restored.data.session);setSession(restored.data.session);}
+          if(restored.data.session){
+            next=await loadAccount(restored.data.session);setSession(restored.data.session);
+            setBlockedOwners(await loadBlockedOwnerIds());setModeration(await loadRecipeModerationStatuses());
+            setLegalGate(!next.termsAcceptedAt||!next.privacyAcceptedAt||!next.overseasTransferAcceptedAt||!next.ageConfirmedAt);
+          }
           setRemote(await catalog());
         }
         dataRef.current=next;setData(next);setName(next.name);setLoaded(true);
@@ -153,12 +171,24 @@ function Application() {
     cloud.auth.startAutoRefresh();
     return ()=>{listener.remove();client.auth.stopAutoRefresh();};
   },[]);
-  async function signIn(provider:'google') {
+  function consentStamp(online:boolean) {
+    const alreadyAccepted=data.termsAcceptedAt&&data.privacyAcceptedAt&&data.ageConfirmedAt&&(!online||data.overseasTransferAcceptedAt);
+    if(alreadyAccepted)return {legalAcceptedAt:data.legalAcceptedAt??data.termsAcceptedAt,termsAcceptedAt:data.termsAcceptedAt,privacyAcceptedAt:data.privacyAcceptedAt,overseasTransferAcceptedAt:data.overseasTransferAcceptedAt,ageConfirmedAt:data.ageConfirmedAt};
+    if(!termsAccepted||!privacyAccepted){Alert.alert('필수 동의가 필요해요','이용약관과 개인정보처리방침을 각각 확인하고 동의해 주세요.');return null;}
+    if(online&&!overseasAccepted){Alert.alert('국외 이전 확인이 필요해요','온라인 계정은 Supabase 미국 리전에 저장됩니다. 동의하지 않으면 로컬 체험을 이용할 수 있어요.');return null;}
+    if(!isAtLeast14(birthDate)){Alert.alert('가입할 수 없어요','만 14세 이상만 가입할 수 있습니다. 생년월일을 YYYY-MM-DD 형식으로 확인해 주세요.');return null;}
+    const now=new Date().toISOString();return {legalAcceptedAt:now,termsAcceptedAt:now,privacyAcceptedAt:now,overseasTransferAcceptedAt:online?now:'',ageConfirmedAt:now};
+  }
+  async function signIn(provider:LoginProvider) {
+    const consent=consentStamp(true);if(!consent)return;
     if(authBusy)return;setAuthBusy(true);
     try {
       const logged=await login(provider);if(!logged)return;
-      const next=await loadAccount(logged);const feed=await catalog();
-      setSession(logged);dataRef.current=next;setData(next);setName(next.name);setRemote(feed);reset('profile');
+      let next=await loadAccount(logged);
+      if(!next.termsAcceptedAt||!next.privacyAcceptedAt||!next.overseasTransferAcceptedAt||!next.ageConfirmedAt)next=await saveAccount({...next,...consent},logged);
+      const feed=await catalog();const blocks=await loadBlockedOwnerIds();const statuses=await loadRecipeModerationStatuses();
+      setSession(logged);setBlockedOwners(blocks);setModeration(statuses);dataRef.current=next;setData(next);setName(next.name);setRemote(feed);reset('profile');
+      setLegalGate(false);
     }catch(e){await cloud?.auth.signOut();Alert.alert('로그인하지 못했어요',e instanceof Error?e.message:'인증 설정을 확인해 주세요.');}
     finally{setAuthBusy(false);}
   }
@@ -167,6 +197,9 @@ function Application() {
     if(session) {
       const result=await cloud?.auth.signOut();if(result?.error){Alert.alert('로그아웃 실패',result.error.message);return;}
       setSession(null);
+      setBlockedOwners([]);
+      setModeration({});
+      setLegalGate(false);
       const stored=await AsyncStorage.getItem(KEY);
       const restored:Data=stored?{...emptyData,...JSON.parse(stored)}:emptyData;
       const next:Data={...restored,recipes:restored.recipes.map(normalizeRecipe),draft:restored.draft?normalizeRecipe(restored.draft):null};
@@ -178,7 +211,7 @@ function Application() {
       {text:'취소',style:'cancel'},
       {text:'계정 삭제',style:'destructive',onPress:async()=>{
         if(!session||authBusy||saving.current)return;setAuthBusy(true);
-        try {await deleteAccount(session);setSession(null);setRemote(await catalog());dataRef.current=emptyData;setData(emptyData);setName('');reset('home');}
+        try {await deleteAccount(session);await AsyncStorage.removeItem(KEY);setSession(null);setBlockedOwners([]);setModeration({});setLegalGate(false);setRemote(await catalog());dataRef.current=emptyData;setData(emptyData);setName('');setTermsAccepted(false);setPrivacyAccepted(false);setOverseasAccepted(false);setBirthDate('');reset('profile');}
         catch(e){Alert.alert('삭제를 완료하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.');}
         finally{setAuthBusy(false);}
       }},
@@ -196,34 +229,72 @@ function Application() {
   async function commit(update:(old:Data)=>Data):Promise<boolean> {
     if(saving.current||!loaded)return false;
     saving.current=true;
-    try {let next=update(dataRef.current);if(session)next=await saveAccount(next,session);else await AsyncStorage.setItem(KEY,JSON.stringify(next));dataRef.current=next;setData(next);return true;}
+    try {let next=update(dataRef.current);if(session){next=await saveAccount(next,session);setModeration(await loadRecipeModerationStatuses());}else await AsyncStorage.setItem(KEY,JSON.stringify(next));dataRef.current=next;setData(next);return true;}
     catch(e) {Alert.alert('저장하지 못했어요',session && e instanceof Error ? e.message : '입력 내용은 화면에 남아 있어요. 다시 시도해 주세요.');return false;}
     finally {saving.current=false;}
   }
   function requireAccount(action:()=>void) {if(data.active)action();else {reset('profile');Alert.alert('내 프로필을 먼저 만들어 주세요','이 기기에서 사용할 이름을 입력하면 Cafe를 만들고 레시피를 저장할 수 있어요.');}}
   const create=()=>requireAccount(()=>go(data.cafe?'editor':'createCafe'));
   const toggle=(key:'saved'|'following',id:string)=>requireAccount(()=>{void commit(d=>({...d,[key]:d[key].includes(id)?d[key].filter(x=>x!==id):[...d[key],id]}));});
+  const uuid=(value:string)=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  function submitReport(targetType:'cafe'|'recipe',targetId:string) {
+    if(!session){Alert.alert('로그인이 필요해요','신고하려면 Google 또는 Apple 계정으로 로그인해 주세요.');return;}
+    const reasons:ReportReason[]=['스팸','부적절한 콘텐츠','저작권 침해','기타'];
+    Alert.alert('신고 사유를 선택해 주세요','신고 내용은 다른 사용자에게 공개되지 않습니다.',[
+      ...reasons.map(reason=>({text:reason,onPress:()=>void reportContent(targetType,targetId,reason).then(()=>Alert.alert('신고를 접수했어요','검토 후 필요한 조치를 진행합니다.')).catch(e=>Alert.alert('신고하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.'))})),
+      {text:'취소',style:'cancel' as const},
+    ]);
+  }
+  function blockCafe(ownerId:string) {
+    if(!session){Alert.alert('로그인이 필요해요','Cafe를 차단하려면 로그인해 주세요.');return;}
+    Alert.alert('이 Cafe를 차단할까요?','홈과 탐색에서 이 Cafe의 레시피가 보이지 않습니다.',[{text:'취소',style:'cancel'},{text:'차단',style:'destructive',onPress:()=>void blockOwner(ownerId).then(()=>{setBlockedOwners(ids=>ids.includes(ownerId)?ids:[...ids,ownerId]);reset('home');}).catch(e=>Alert.alert('차단하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.'))}]);
+  }
+  const localRegistrationReady=Boolean((data.termsAcceptedAt&&data.privacyAcceptedAt&&data.ageConfirmedAt)||(termsAccepted&&privacyAccepted&&isAtLeast14(birthDate)));
+  const onlineRegistrationReady=Boolean((data.termsAcceptedAt&&data.privacyAcceptedAt&&data.overseasTransferAcceptedAt&&data.ageConfirmedAt)||(localRegistrationReady&&overseasAccepted));
+  async function startLocalProfile() {
+    const consent=consentStamp(false);if(!consent)return;
+    await commit(d=>({...d,...consent,name:name.trim().slice(0,40),active:true}));
+  }
+  async function acceptExistingAccount() {
+    const consent=consentStamp(true);if(!consent||!session)return;
+    setAuthBusy(true);
+    try {const next=await saveAccount({...dataRef.current,...consent},session);dataRef.current=next;setData(next);setLegalGate(false);reset('profile');}
+    catch(e){Alert.alert('동의를 저장하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.');}
+    finally{setAuthBusy(false);}
+  }
+  const registrationFields=<>
+    <Field value={birthDate} onChange={setBirthDate} placeholder="생년월일 (YYYY-MM-DD)"/>
+    {!!birthDate&&!isAtLeast14(birthDate)&&<Text style={s.validation}>만 14세 이상만 가입할 수 있습니다.</Text>}
+    <Consent checked={termsAccepted} onPress={()=>setTermsAccepted(value=>!value)} label="이용약관에 동의합니다 (필수)"/>
+    <Consent checked={privacyAccepted} onPress={()=>setPrivacyAccepted(value=>!value)} label="개인정보 수집·이용에 동의합니다 (필수)"/>
+    {cloud&&<Consent checked={overseasAccepted} onPress={()=>setOverseasAccepted(value=>!value)} label="Supabase 미국 리전으로의 개인정보 국외 이전에 동의합니다 (온라인 기능 필수)"/>}
+    <View style={s.row}><Button quiet title="이용약관" onPress={()=>go('legal','terms')}/><Button quiet title="개인정보처리방침" onPress={()=>go('legal','privacy')}/><Button quiet title="국외 이전 안내" onPress={()=>go('legal','overseas')}/><Button quiet title="커뮤니티 운영정책" onPress={()=>go('legal','community')}/></View>
+  </>;
   function openCafe(id:string) {setCafeTab('레시피');setStack(current=>{const base=current.at(-1)?.screen==='detail'?current.slice(0,-1):current;return base.at(-1)?.screen==='cafe'&&base.at(-1)?.id===id?base:[...base,{screen:'cafe',id}];});}
   function cards(items:Recipe[]) {return items.length?items.map(r=><Pressable accessibilityRole="button" key={r.id} style={s.card} onPress={()=>go('detail',r.id)}>
     {recipeImage(r)?<Image source={recipeImage(r)} style={s.thumb}/>:<View style={[s.thumb,{backgroundColor:owner(r).color}]}><Text style={s.white}>{r.equipment}</Text></View>}
-    <View style={{flex:1}}><Text style={s.eyebrow}>{owner(r).name}</Text><Text style={s.cardTitle}>{r.title}</Text><Text style={s.small}>{r.bean?.product ? `${r.bean.product} · ` : ''}{r.beans} · {r.duration} · {r.steps.length}단계</Text></View><Text>›</Text>
+    <View style={{flex:1}}><Text style={s.eyebrow}>{owner(r).name}</Text><Text style={s.cardTitle}>{r.title}</Text>{session&&r.cafeId===data.cafe?.id&&moderation[r.id]&&<Text style={s.moderation}>{moderation[r.id].status==='approved'?'게시됨':moderation[r.id].status==='rejected'?`반려됨${moderation[r.id].reviewNote?` · ${moderation[r.id].reviewNote}`:' · 수정 후 다시 제출'}`:'검토 중 · 승인 후 공개'}</Text>}<Text style={s.small}>{r.bean?.product ? `${r.bean.product} · ` : ''}{r.beans} · {r.duration} · {r.steps.length}단계</Text></View><Text>›</Text>
   </Pressable>):<Text style={s.empty}>아직 레시피가 없어요.</Text>;}
   const header=(title:string)=><View style={s.row}><Button title="‹ 뒤로" quiet onPress={pop}/><Text style={s.heading}>{title}</Text></View>;
+  const legalTitle=route.id==='terms'?'이용약관':route.id==='overseas'?'개인정보 국외 이전':route.id==='community'?'커뮤니티 운영정책':'개인정보처리방침';
+  const legalBody=route.id==='terms'?TERMS_OF_SERVICE:route.id==='overseas'?OVERSEAS_TRANSFER_NOTICE:route.id==='community'?COMMUNITY_GUIDELINES:PRIVACY_POLICY;
   const confirmDiscard=()=>Alert.alert('작성을 닫을까요?','저장하지 않은 변경은 사라집니다. 초안 저장으로 이어서 작성할 수 있어요.',[{text:'계속 작성',style:'cancel'},{text:'닫기',onPress:pop}]);
   if(loadError) return <View style={s.body}><Text>{loadError}</Text></View>;
   if(!loaded)return <View style={s.body}><Text>내 Cafe를 불러오는 중…</Text></View>;
+  if(legalGate)return <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS==='ios'?'padding':undefined}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.body}>{route.screen==='legal'?<>{header(legalTitle)}<Text style={s.legalBody}>{legalBody}</Text></>:<><Text style={s.title}>계속 이용하기 전에 확인해 주세요</Text><Text style={s.muted}>만 14세 이상 확인과 각 필수 항목에 대한 개별 동의가 필요합니다.</Text>{registrationFields}<Button title="동의하고 계속" disabled={!onlineRegistrationReady||authBusy} onPress={()=>void acceptExistingAccount()}/><Button quiet title="로그아웃" onPress={()=>void signOut()}/></>}</ScrollView></KeyboardAvoidingView>;
   if(route.screen==='createCafe')return <CreateCafeScreen initial={data.cafe??undefined} onBack={confirmDiscard} onSave={async c=>{
     if(sampleCafes.some(x=>x.handle===c.handle)){Alert.alert('사용 중인 핸들이에요','다른 핸들을 선택해 주세요.');return;}
     if(await commit(d=>({...d,cafe:c})))reset('profile');
   }}/>;
   if(route.screen==='editor'&&data.cafe)return <CreateRecipeScreen online={!!session} key={route.id??'new'} cafe={data.cafe} initial={route.id==='draft'?data.draft??undefined:data.recipes.find(r=>r.id===route.id)} onBack={confirmDiscard}
     onDraft={async r=>{if(await commit(d=>({...d,draft:r})))reset('profile');}}
-    onPublish={async r=>{const published={...r,cafeId:data.cafe!.id};if(await commit(d=>({...d,recipes:[published,...d.recipes.filter(x=>x.id!==r.id)],draft:d.draft?.id===r.id?null:d.draft}))) {reset('profile');Alert.alert('레시피를 저장했어요','내 Cafe와 홈 피드에서 확인하고 따라 내릴 수 있어요.');}}}/>;
+    onPublish={async r=>{const published={...r,cafeId:data.cafe!.id};if(await commit(d=>({...d,recipes:[published,...d.recipes.filter(x=>x.id!==r.id)],draft:d.draft?.id===r.id?null:d.draft}))) {reset('profile');Alert.alert('레시피를 저장했어요',session?'검토가 끝나면 다른 이용자의 피드에 공개됩니다. 내 Cafe에서는 검토 상태를 확인할 수 있어요.':'내 Cafe에서 확인하고 따라 내릴 수 있어요.');}}}/>;
   if(route.screen==='brew'&&recipe)return <Brew recipe={recipe} onExit={pop} onDone={()=>{setRating(5);setNote('');setStack(current=>[...current.slice(0,-1),{screen:'review',id:recipe.id}]);}}/>;
   const tab=['home','search','saved','profile'].includes(route.screen);
   return <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS==='ios'?'padding':undefined}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.body}>
       {route.screen==='settings'&&session&&<Button quiet title="온라인 계정 삭제" disabled={authBusy} onPress={removeCloudAccount}/>}
+      {route.screen==='legal'&&<>{header(legalTitle)}<Text style={s.legalBody}>{legalBody}</Text></>}
       {route.screen==='home'&&<>
         <View style={s.row}><View><Text style={s.brandEyebrow}>CAFE NOTE</Text><Text style={s.brand}>오늘의 커피</Text><Text style={s.muted}>천천히 고르고, 함께 내려요</Text></View><Pressable style={s.textAction} onPress={()=>reset('profile')}><Text style={s.textActionLabel}>내 Cafe →</Text></Pressable></View>
         <Pressable style={s.searchPrompt} onPress={()=>reset('search')}><Text style={s.searchPromptIcon}>⌕</Text><Text style={s.searchPromptText}>Cafe, 원두, 레시피를 찾아보세요</Text></Pressable>
@@ -240,23 +311,23 @@ function Application() {
       {route.screen==='saved'&&<><Text style={s.title}>다시 내리고 싶은 커피</Text>{cards(recipes.filter(r=>data.saved.includes(r.id)))}</>}
       {route.screen==='profile'&&<>
         <View style={s.row}><Text style={s.title}>내 Cafe</Text><Button quiet title="설정" onPress={()=>go('settings')}/></View>
-        {!data.active?<><Text style={s.heading}>나만의 커피 기록을 시작해요</Text><Text style={s.muted}>{cloud?'Google 계정으로 로그인하면 기기를 바꿔도 내 Cafe를 이어갈 수 있어요.':'온라인 로그인을 준비 중이에요. 먼저 이 기기에서 사용할 프로필을 만들 수 있어요.'}</Text>{cloud&&<Button title="Google로 계속하기" disabled={authBusy} onPress={()=>void signIn('google')}/>}<Field value={name} onChange={setName} placeholder="사용할 이름"/><Button title="로컬 프로필로 시작" disabled={!name.trim()||authBusy} onPress={()=>void commit(d=>({...d,name:name.trim().slice(0,40),active:true}))}/></>:<><Text style={s.heading}>{data.name}님의 커피 공간</Text><Text style={s.small}>{session?'계정에 연결됨 · 온라인 저장':'로컬 프로필 · 이 기기에 저장'}</Text>
+        {!data.active?<><Text style={s.heading}>나만의 커피 기록을 시작해요</Text><Text style={s.muted}>만 14세 이상만 가입할 수 있으며, 시작하기 전에 필수 항목을 확인해 주세요.</Text>{registrationFields}{cloud&&appleLoginEnabled&&Platform.OS==='ios'&&<AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK} cornerRadius={8} style={[s.appleButton,(!onlineRegistrationReady||authBusy)&&s.disabled]} onPress={()=>{if(onlineRegistrationReady&&!authBusy)void signIn('apple');}}/>}{cloud&&<Button title="Google로 계속하기" disabled={!onlineRegistrationReady||authBusy} onPress={()=>void signIn('google')}/>}<Field value={name} onChange={setName} placeholder="사용할 이름"/><Button title="로컬 프로필로 시작" disabled={!name.trim()||!localRegistrationReady||authBusy} onPress={()=>void startLocalProfile()}/><Text style={s.small}>국외 이전에 동의하지 않아도 로컬 체험은 이용할 수 있습니다. 로컬 데이터는 이 기기에만 저장됩니다.</Text></>:<><Text style={s.heading}>{data.name}님의 커피 공간</Text><Text style={s.small}>{session?'계정에 연결됨 · 온라인 저장':'로컬 프로필 · 이 기기에 저장'}</Text>
           {data.cafe?<><Pressable style={[s.hero,{backgroundColor:data.cafe.color}]} onPress={()=>openCafe(data.cafe!.id)}><Text style={s.heroTitle}>{data.cafe.name}</Text><Text style={s.white}>@{data.cafe.handle}</Text><Text style={s.white}>{data.cafe.bio}</Text><Text style={s.white}>레시피 {data.recipes.length} · Cafe 열기 →</Text></Pressable><View style={s.row}><Button quiet title="Cafe 수정" onPress={()=>go('createCafe')}/><Button title="＋ 새 레시피" onPress={create}/></View>{data.draft&&<Button quiet title={`초안 이어 쓰기 · ${data.draft.title||'제목 없음'}`} onPress={()=>go('editor','draft')}/>}<Text style={s.heading}>내가 올린 레시피</Text>{cards(data.recipes)}</>:<Button title="Cafe 만들기" onPress={create}/>}</>}
         <Text style={s.heading}>내 추출 기록</Text>{data.reviews.length?data.reviews.map(review=><View key={review.id} style={s.panel}><Text style={s.cardTitle}>{review.title}</Text><Text>{'★'.repeat(review.rating)} · {new Date(review.date).toLocaleDateString()}</Text><Text style={s.muted}>{review.note||'맛 메모 없음'}</Text></View>):<Text style={s.empty}>커피를 내리고 첫 맛 기록을 남겨 보세요.</Text>}
       </>}
-      {route.screen==='cafe'&&cafe&&<>{header('Cafe')}<View style={[s.hero,{backgroundColor:cafe.color}]}><Text style={s.heroTitle}>{cafe.name}</Text><Text style={s.white}>@{cafe.handle}</Text><Text style={s.white}>{recipes.filter(r=>owner(r).id===cafe.id).length}개 레시피</Text></View><Button title={data.following.includes(cafe.id)?'팔로우 중 ✓':'팔로우'} onPress={()=>toggle('following',cafe.id)}/><View style={s.row}><Button quiet={cafeTab!=='레시피'} title="레시피" onPress={()=>setCafeTab('레시피')}/><Button quiet={cafeTab!=='소개'} title="소개" onPress={()=>setCafeTab('소개')}/></View>{cafeTab==='소개'?<Text style={s.muted}>{cafe.bio}</Text>:<><Button quiet title={latest?'최신순 ↓':'오래된 순 ↑'} onPress={()=>setLatest(x=>!x)}/>{cards(recipes.filter(r=>owner(r).id===cafe.id).sort((a,b)=>(latest?1:-1)*b.publishedAt.localeCompare(a.publishedAt)))}</>}</>}
+      {route.screen==='cafe'&&cafe&&<>{header('Cafe')}<View style={[s.hero,{backgroundColor:cafe.color}]}><Text style={s.heroTitle}>{cafe.name}</Text><Text style={s.white}>@{cafe.handle}</Text><Text style={s.white}>{recipes.filter(r=>owner(r).id===cafe.id).length}개 레시피</Text></View><Button title={data.following.includes(cafe.id)?'팔로우 중 ✓':'팔로우'} onPress={()=>toggle('following',cafe.id)}/>{data.cafe?.id!==cafe.id&&uuid(cafe.id)&&<View style={s.row}><Button quiet title="Cafe 신고하기" onPress={()=>submitReport('cafe',cafe.id)}/><Button quiet title="Cafe 차단하기" onPress={()=>blockCafe(cafe.id)}/></View>}<View style={s.row}><Button quiet={cafeTab!=='레시피'} title="레시피" onPress={()=>setCafeTab('레시피')}/><Button quiet={cafeTab!=='소개'} title="소개" onPress={()=>setCafeTab('소개')}/></View>{cafeTab==='소개'?<Text style={s.muted}>{cafe.bio}</Text>:<><Button quiet title={latest?'최신순 ↓':'오래된 순 ↑'} onPress={()=>setLatest(x=>!x)}/>{cards(recipes.filter(r=>owner(r).id===cafe.id).sort((a,b)=>(latest?1:-1)*b.publishedAt.localeCompare(a.publishedAt)))}</>}</>}
       {route.screen==='detail'&&recipe&&<>{header('레시피')}{recipeImage(recipe)?<Image source={recipeImage(recipe)} style={s.cover}/>:<View style={[s.hero,{backgroundColor:owner(recipe).color}]}><Cup/></View>}
         <Pressable style={s.panel} onPress={()=>openCafe(owner(recipe).id)}><Text style={s.heading}>{owner(recipe).name} ›</Text></Pressable><Text style={s.title}>{recipe.title}</Text><Text style={s.muted}>{recipe.description}</Text>
         {recipe.bean&&<View style={s.beanCard}><Image source={sampleBeanImage} style={s.beanImage}/><View style={s.beanCopy}><Text style={s.eyebrow}>CAFE 추천 원두</Text><Text style={s.cardTitle}>{recipe.bean.product}</Text><Text style={s.small}>{[recipe.bean.roaster,recipe.bean.origin,recipe.bean.process,recipe.bean.roast].filter(Boolean).join(' · ') || '이 레시피에 어울리는 원두'}</Text></View></View>}
         <View style={s.panel}><Text style={s.eyebrow}>컵 사이즈에 맞춰 보기</Text><View style={s.cupOptions}>{[recipe.baseVolumeMl,Math.round(recipe.baseVolumeMl*1.5)].map(volume=><Pressable key={volume} style={[s.cupOption,selectedVolume(recipe)===volume&&s.cupOptionActive]} onPress={()=>setCupSelection({recipeId:recipe.id,volumeMl:volume})}><Text style={[s.cupOptionText,selectedVolume(recipe)===volume&&s.cupOptionTextActive]}>{volume}ml{volume===recipe.baseVolumeMl?' · 기준':''}</Text></Pressable>)}</View><Text style={s.cardTitle}>{recipe.equipment} · 원두 {scaleRecipe(recipe,selectedVolume(recipe)).beansG}g</Text><Text style={s.muted}>물 {scaleRecipe(recipe,selectedVolume(recipe)).waterG}g · {recipe.temperature} · {recipe.duration}</Text></View>
-        <View style={s.row}><Button quiet title={data.saved.includes(recipe.id)?'저장됨 ♥':'저장 ♡'} onPress={()=>toggle('saved',recipe.id)}/><Button quiet title="공유" onPress={()=>void Share.share({message:`${recipe.title}\n${recipe.description}\n${recipe.equipment} / ${recipe.bean?.product ? `추천 원두 ${recipe.bean.product} (${recipe.beans})` : `원두 ${recipe.beans}`} / 물 ${recipe.water} / ${recipe.temperature}\n${recipe.steps.map((x,i)=>`${i+1}. ${x.title} ${x.value}`).join('\n')}`}).catch(()=>Alert.alert('공유를 열 수 없어요'))}/></View>
+        <View style={s.row}><Button quiet title={data.saved.includes(recipe.id)?'저장됨 ♥':'저장 ♡'} onPress={()=>toggle('saved',recipe.id)}/><Button quiet title="공유" onPress={()=>void Share.share({message:`${recipe.title}\n${recipe.description}\n${recipe.equipment} / ${recipe.bean?.product ? `추천 원두 ${recipe.bean.product} (${recipe.beans})` : `원두 ${recipe.beans}`} / 물 ${recipe.water} / ${recipe.temperature}\n${recipe.steps.map((x,i)=>`${i+1}. ${x.title} ${x.value}`).join('\n')}`}).catch(()=>Alert.alert('공유를 열 수 없어요'))}/>{data.cafe?.id!==owner(recipe).id&&uuid(owner(recipe).id)&&<Button quiet title="신고" onPress={()=>submitReport('recipe',recipe.id)}/>}</View>
         <Text style={s.heading}>추출 단계</Text>{recipe.steps.map((step,i)=><View style={s.panel} key={step.id}>{step.media&&<StepMediaView key={step.media.uri} media={step.media}/>}<Text style={s.cardTitle}>{i+1}. {step.title}</Text><Text style={s.small}>{step.type==='timer'?'자동 타이머':'완료 후 탭'} · {step.value}</Text></View>)}
         <Button title="따라 내리기 →" onPress={()=>go('brew',recipe.id)}/>
         {data.active&&data.recipes.some(r=>r.id===recipe.id)&&<View style={s.row}><Button quiet title="수정" onPress={()=>go('editor',recipe.id)}/><Button quiet title="삭제" onPress={()=>Alert.alert('레시피를 삭제할까요?','기기에 저장된 이 레시피가 삭제됩니다.',[{text:'취소',style:'cancel'},{text:'삭제',style:'destructive',onPress:async()=>{if(await commit(d=>({...d,recipes:d.recipes.filter(r=>r.id!==recipe.id),saved:d.saved.filter(id=>id!==recipe.id)})))pop();}}])}/></View>}
         <Text style={s.heading}>맛 기록</Text>{data.reviews.filter(x=>x.recipeId===recipe.id).map(x=><View style={s.panel} key={x.id}><Text>{'★'.repeat(x.rating)} · {x.note}</Text></View>)}
       </>}
       {route.screen==='review'&&recipe&&<><Text style={s.eyebrow}>BREW COMPLETE</Text><Cup/><Text style={s.title}>멋지게 내렸어요!</Text><Text style={s.muted}>{recipe.title} · 오늘의 한 잔은 어땠나요?</Text><View style={s.row}>{[1,2,3,4,5].map(n=><Pressable accessibilityLabel={`${n}점`} key={n} onPress={()=>setRating(n)}><Text style={{fontSize:38,color:n<=rating?orange:'#D9D0C8'}}>★</Text></Pressable>)}</View><Field value={note} onChange={setNote} placeholder="산미, 단맛, 다음번에 바꾸고 싶은 점" multiline/><Button title="맛 기록 저장" onPress={async()=>{if(await commit(d=>({...d,reviews:[{id:String(Date.now()),recipeId:recipe.id,title:recipe.title,rating,note,date:new Date().toISOString()},...d.reviews]})))reset('profile');}}/><Button quiet title="기록 없이 홈으로" onPress={()=>reset('home')}/></>}
-      {route.screen==='settings'&&<>{header('계정 설정')}<Text style={s.muted}>{session?'Google 계정에 연결되었습니다.':'로컬 프로필 · 이 기기에 저장됩니다.'}</Text>{cloud&&!session&&<><Button title="Google로 로그인" onPress={()=>void signIn('google')} disabled={authBusy}/><Text style={s.small}>로컬 기록은 이 기기에 남습니다. 로그인 계정의 기록은 별도로 관리됩니다.</Text></>}<Field value={name} onChange={setName} placeholder="프로필 이름"/><Button title="이름 저장" disabled={!name.trim()} onPress={async()=>{if(await commit(d=>({...d,name:name.trim().slice(0,40)})))pop();}}/><Button quiet title={session?'로그아웃':'프로필에서 나가기'} onPress={()=>void signOut()}/>{!session&&<Button quiet title="내 로컬 데이터 삭제" onPress={()=>Alert.alert('내 데이터를 삭제할까요?','Cafe, 레시피, 초안, 팔로우, 저장 및 맛 기록이 기기에서 삭제되며 되돌릴 수 없습니다.',[{text:'취소',style:'cancel'},{text:'삭제',style:'destructive',onPress:async()=>{if(await commit(()=>({...emptyData}))) {setName('');reset('home');}}}])}/>}</>}
+      {route.screen==='settings'&&<>{header('계정 설정')}<Text style={s.muted}>{session?'온라인 계정에 연결되었습니다.':'로컬 프로필 · 이 기기에 저장됩니다.'}</Text>{cloud&&!session&&<>{registrationFields}{appleLoginEnabled&&Platform.OS==='ios'&&<AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK} cornerRadius={8} style={[s.appleButton,(!onlineRegistrationReady||authBusy)&&s.disabled]} onPress={()=>{if(onlineRegistrationReady&&!authBusy)void signIn('apple');}}/>}<Button title="Google로 로그인" onPress={()=>void signIn('google')} disabled={!onlineRegistrationReady||authBusy}/><Text style={s.small}>로컬 기록은 이 기기에 남습니다. 로그인 계정의 기록은 별도로 관리됩니다.</Text></>}<Field value={name} onChange={setName} placeholder="프로필 이름"/><Button title="이름 저장" disabled={!name.trim()} onPress={async()=>{if(await commit(d=>({...d,name:name.trim().slice(0,40)})))pop();}}/><View style={s.row}><Button quiet title="이용약관" onPress={()=>go('legal','terms')}/><Button quiet title="개인정보처리방침" onPress={()=>go('legal','privacy')}/><Button quiet title="국외 이전 안내" onPress={()=>go('legal','overseas')}/><Button quiet title="커뮤니티 운영정책" onPress={()=>go('legal','community')}/></View><Text style={s.small}>신고 처리 및 개인정보 문의: {SUPPORT_EMAIL}</Text>{blockedOwners.length>0&&<><Text style={s.heading}>차단한 Cafe</Text>{blockedOwners.map(id=><View key={id} style={s.row}><Text style={s.muted}>{allCafes.find(c=>c.id===id)?.name??id}</Text><Button quiet title="차단 해제" onPress={()=>void unblockOwner(id).then(()=>setBlockedOwners(ids=>ids.filter(x=>x!==id))).catch(e=>Alert.alert('차단을 해제하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.'))}/></View>)}</>}<Button quiet title={session?'로그아웃':'프로필에서 나가기'} onPress={()=>void signOut()}/>{!session&&<Button quiet title="내 로컬 데이터 삭제" onPress={()=>Alert.alert('내 데이터를 삭제할까요?','Cafe, 레시피, 초안, 팔로우, 저장 및 맛 기록이 기기에서 삭제되며 되돌릴 수 없습니다.',[{text:'취소',style:'cancel'},{text:'삭제',style:'destructive',onPress:async()=>{if(await commit(()=>({...emptyData}))) {setName('');reset('home');}}}])}/>}</>}
     </ScrollView>
     {tab&&<View style={s.nav}>{(['home','search','saved','profile'] as const).map((screen,i)=>{const active=route.screen===screen;return <Pressable key={screen} style={[s.navItem,active&&s.navItemActive]} onPress={()=>reset(screen)}><Text style={[s.navIcon,active&&s.navTextActive]}>{['⌂','⌕','♡','◉'][i]}</Text><Text style={[s.navText,active&&s.navTextActive]}>{['홈','탐색','저장','내 Cafe'][i]}</Text></Pressable>;})}</View>}
   </KeyboardAvoidingView>;
@@ -265,7 +336,7 @@ export default function CafeApp(){return <SafeAreaProvider><SafeAreaView style={
 const s=StyleSheet.create({
   body:{paddingHorizontal:18,paddingTop:18,gap:20,paddingBottom:48},row:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'},
   brandEyebrow:{fontSize:10,letterSpacing:2.2,color:'#817468',fontWeight:'700'},brand:{fontFamily:'Georgia',fontSize:34,lineHeight:42,letterSpacing:-1.2,color:ink,marginTop:3},title:{fontFamily:'Georgia',fontSize:30,lineHeight:40,color:ink},heading:{fontFamily:'Georgia',fontSize:22,lineHeight:30,color:ink},
-  muted:{fontSize:14,lineHeight:23,color:'#786C61'},small:{fontSize:12,lineHeight:19,color:'#817468'},eyebrow:{fontSize:10,letterSpacing:1.2,color:orange,fontWeight:'800'},
+  muted:{fontSize:14,lineHeight:23,color:'#786C61'},small:{fontSize:12,lineHeight:19,color:'#817468'},eyebrow:{fontSize:10,letterSpacing:1.2,color:orange,fontWeight:'800'},moderation:{fontSize:11,lineHeight:18,color:'#8E5C45',fontWeight:'700'},
   button:{borderRadius:8,paddingVertical:13,paddingHorizontal:17,backgroundColor:orange,alignItems:'center',borderWidth:1,borderColor:orange},quiet:{backgroundColor:'transparent',borderColor:'#CFC2B3'},buttonText:{color:'#FFF9F1',fontWeight:'700',fontSize:13},
   textAction:{paddingVertical:8,borderBottomWidth:1,borderColor:'#A99786'},textActionLabel:{color:ink,fontSize:12,fontWeight:'700'},refreshLink:{alignSelf:'flex-end',paddingVertical:2},refreshLinkText:{color:'#817468',fontSize:11,borderBottomWidth:1,borderColor:'#CFC2B3'},
   input:{backgroundColor:'#FBF7F1',borderRadius:8,borderWidth:1,borderColor:'#D8CCBE',padding:15,fontSize:15,color:ink},hero:{backgroundColor:'#6C715C',borderRadius:10,padding:22,gap:13},heroTitle:{fontFamily:'Georgia',fontSize:31,lineHeight:39,color:'#FFF9F1'},white:{color:'#FFF9F1',fontWeight:'600',fontSize:13},
@@ -283,4 +354,5 @@ const s=StyleSheet.create({
   brewStepTitle:{maxWidth:340,textAlign:'center',fontFamily:'Georgia',fontSize:29,lineHeight:39,color:ink},brewHint:{maxWidth:340,textAlign:'center',fontSize:14,lineHeight:23,color:'#786C61'},
   stepMedia:{width:'100%',height:190,borderRadius:6,backgroundColor:'#DED3C5'},stepMediaFrame:{width:'100%',height:190,borderRadius:6,overflow:'hidden',backgroundColor:ink},stepMediaCompact:{width:'100%',maxWidth:340,height:170},stepVideo:{width:'100%',height:'100%'},
   brewActions:{flexDirection:'row',alignItems:'center',gap:8,paddingHorizontal:16,paddingTop:8,paddingBottom:12},brewControl:{flex:1,minWidth:0,borderRadius:7,paddingHorizontal:6,paddingVertical:14,backgroundColor:'#E9E0D2',alignItems:'center',borderWidth:1,borderColor:'#D8CCBE'},brewControlPrimary:{backgroundColor:orange,borderColor:orange},brewControlText:{color:ink,fontWeight:'700',fontSize:13},brewControlTextPrimary:{color:'#FFF9F1'},disabled:{opacity:0.4},
+  validation:{color:'#A33A2B',fontSize:12,lineHeight:18},consentRow:{flexDirection:'row',alignItems:'flex-start',gap:10,paddingVertical:4},checkbox:{width:22,height:22,borderRadius:4,borderWidth:1,borderColor:'#A99786',textAlign:'center',lineHeight:20,color:orange,fontWeight:'800'},consentText:{flex:1,color:ink,fontSize:13,lineHeight:21},appleButton:{width:'100%',height:48},legalBody:{fontSize:14,lineHeight:24,color:ink},
 });

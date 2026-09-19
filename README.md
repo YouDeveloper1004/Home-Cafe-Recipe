@@ -22,6 +22,11 @@ pnpm typecheck
 - 게시 레시피의 실제 단계 실행, 연속 탭 방지, 이전 단계, 자동 타이머, 일시정지, 10초 추가, 건너뛰기, 진동, 화면 유지
 - 별점과 맛 기록, 재시작 복원, 저장 실패 처리
 - Cafe 뒤로 가기는 홈/검색/저장/프로필로 복귀
+- Cafe·레시피 신고, Cafe 차단 및 차단 콘텐츠 피드 제외
+- Apple·Google 로그인, 만 14세 이상 확인, 이용약관·개인정보·국외이전 개별 동의
+- 인앱 개인정보처리방침·이용약관·국외이전 안내·커뮤니티 정책, 온라인 계정과 첨부 파일 삭제
+- 새 레시피와 수정 레시피의 공개 전 검토 상태, 서버 금칙어 검사, 신고 중복·시간당 제출 제한
+- 업로드 이미지 재인코딩(EXIF 제거)과 사용하지 않는 원격 첨부 정리
 
 기존 `@cafe/creator-data/v1` 데이터를 새 저장소로 읽어옵니다. 로컬 프로필에 Google 로그인 상태를 표시하지 않습니다. 온라인 계정 기록과 로컬 기록은 별도입니다.
 
@@ -31,12 +36,48 @@ Supabase 무료 프로젝트가 연결되어 있고 초기 스키마, 공개 이
 
 새 Supabase 프로젝트로 이전할 때만 다음 설정을 다시 수행합니다.
 
-1. `supabase/schema.sql`을 빈 프로젝트에서 한 번 실행합니다.
+1. 새 프로젝트는 `supabase/schema.sql`을 실행한 뒤 `supabase/migrations/20260918_moderation_privacy.sql`을 실행합니다. 기존 프로젝트는 `supabase/migrations/20260918_release_readiness.sql`, `supabase/migrations/20260918_moderation_privacy.sql` 순서로 SQL Editor에서 실행합니다.
 2. `.env.example`을 참고해 `.env.local`에 프로젝트 URL과 publishable key를 설정합니다. **service-role key는 앱에 넣지 않습니다.**
 3. Google OAuth 공급자를 등록하고 Supabase Site URL과 Redirect URL을 모두 `caferecipes://auth/callback`으로 설정합니다.
 4. 환경 변수를 적용해 Metro를 다시 시작하고 개발 빌드에서 인증을 검사합니다.
 
-설정된 앱에서는 Google 로그인 버튼만 나타납니다. PKCE로 인증하고 세션을 SecureStore에 저장합니다. 개인 상태는 본인만 조회할 수 있고, Cafe/게시 레시피는 공개 카탈로그에 분리됩니다. 서버 저장 성공 후 UI에 반영합니다. 사진과 단계 영상은 본인 폴더에 업로드합니다. `save_cafe_account`는 개인 상태와 카탈로그를 트랜잭션으로 갱신합니다. 계정 삭제는 확인 후 첨부 미디어, 계정 및 연결 데이터를 삭제합니다.
+Google은 PKCE로 인증하고 Apple은 네이티브 identity token을 Supabase에 전달합니다. 세션은 SecureStore에 저장합니다. 개인 상태는 본인만 조회할 수 있고, Cafe/게시 레시피는 공개 카탈로그에 분리됩니다. 신고는 작성자만 제출할 수 있고 일반 사용자는 조회할 수 없습니다. 차단 목록은 본인만 읽고 추가·삭제할 수 있습니다.
+
+사진과 단계 영상은 본인 UID 폴더에 업로드합니다. 이미지는 업로드 전에 JPEG로 재인코딩해 원본 EXIF 위치 메타데이터를 제거하고, 저장 후 현재 레시피에서 참조하지 않는 본인 폴더 파일을 정리합니다. 계정 삭제는 먼저 Storage API가 실제 파일을 지우고, 그 작업이 모두 성공한 뒤 계정과 연결 데이터를 삭제합니다. 중간에 실패하면 로컬 세션을 유지하므로 다시 시도할 수 있습니다.
+
+## Sign in with Apple 설정
+
+코드는 준비되어 있지만 다음 콘솔 설정은 앱 소유자가 직접 완료해야 합니다.
+
+유료 Apple Developer 설정이 끝나기 전에는 `.env.local`의 `EXPO_PUBLIC_APPLE_LOGIN_ENABLED`를 `false`로 유지합니다. 설정과 실기기 검증이 모두 끝난 뒤에만 `true`로 바꾸면 버튼이 노출됩니다. Google 로그인을 제공하는 iOS 앱은 심사 전에 Apple 로그인을 동등하게 제공하거나 iOS의 제3자 소셜 로그인을 제거해야 합니다.
+
+1. Apple Developer에서 앱의 Bundle ID `com.seungmunyou.caferecipes`에 **Sign in with Apple** capability를 켭니다.
+2. Apple Developer의 Certificates, Identifiers & Profiles에서 Sign in with Apple용 Services ID와 Key를 만들고 Team ID, Key ID, 내려받은 `.p8` 키를 안전하게 보관합니다. 키는 다시 내려받을 수 없고 저장소에 커밋하면 안 됩니다.
+3. Supabase Dashboard → Authentication → Providers → Apple에서 Provider를 활성화하고 Client ID/허용 Client ID, Team ID, Key ID와 secret을 입력합니다. 네이티브 앱 토큰을 허용하도록 Bundle ID도 Client ID 목록에 포함합니다.
+4. Authentication → URL Configuration에서 앱 콜백 `caferecipes://auth/callback`을 허용합니다.
+5. `ios.usesAppleSignIn`이 네이티브 권한을 바꾸므로 기존 설치 앱에는 JavaScript 새로고침만으로 반영되지 않습니다. `pnpm ios` 또는 EAS Build로 새 iOS 바이너리를 만들어 실기기에 다시 설치합니다.
+6. 실기기에서 Apple 버튼 → Face ID/Touch ID → 로그인 → `cafe_accounts` 행 생성까지 확인합니다.
+
+Apple Developer Program과 App Store 배포에는 Apple의 유료 멤버십이 필요합니다. Supabase Provider의 client secret은 만료 전에 갱신해야 합니다.
+
+## 공개 정책 페이지와 스토어 URL
+
+- 문서 원본: `legal/privacy-policy.md`, `legal/terms-of-service.md`, `legal/community-guidelines.md`, `legal/overseas-transfer.md`
+- 앱 표시용 원본: `legal.ts`
+- 공개 웹 문서: `docs/` (GitHub Pages에서 main 브랜치의 `/docs` 폴더를 배포)
+- 예상 개인정보처리방침 URL: `https://youdeveloper1004.github.io/Home-Cafe-Recipe/privacy.html`
+- 예상 계정 삭제 URL: `https://youdeveloper1004.github.io/Home-Cafe-Recipe/delete-account.html`
+- 신고·개인정보 문의: `seungmuny1004@gmail.com`
+- Supabase 데이터 리전: 미국 동부 버지니아(AWS `us-east-1`)
+- 정책 문서는 출시 전 한국 개인정보보호 법률 전문가 검토를 권장합니다.
+
+GitHub에 변경사항을 올린 뒤 Repository Settings → Pages → Deploy from a branch에서 `main`과 `/docs`를 선택합니다. 실제 URL이 열린 뒤 App Store Connect의 Privacy Policy URL과 Google Play Console의 개인정보처리방침·계정 삭제 URL에 입력합니다.
+
+## 신고와 콘텐츠 검토 운영
+
+신규 또는 변경된 온라인 레시피는 `recipe_moderation.pending`으로 저장되고 공개 카탈로그에는 승인된 버전만 노출됩니다. 작성자는 앱에서 검토 중·게시됨·반려됨 상태를 확인합니다. 서버는 외부 링크와 운영 금칙어를 우선 거르고, 운영자는 Supabase Dashboard에서 승인·반려합니다. 신고는 동일 대상의 열린 중복 신고를 막고 계정당 시간당 10회로 제한합니다.
+
+검토 SQL과 처리 기준은 `legal/moderation-operations.md`를 따릅니다. 앱 심사 전에 실제 운영자가 매일 확인 가능한 이메일과 처리 루틴을 유지해야 합니다.
 
 ## 검증과 남은 작업
 
@@ -44,6 +85,6 @@ Supabase 무료 프로젝트가 연결되어 있고 초기 스키마, 공개 이
 
 Supabase 인증 설정, Google 공급자 활성화, OAuth 리디렉션, 공개 카탈로그 읽기, 10MB 파일 제한의 사진·영상 저장 형식까지 원격에서 확인했습니다. Xcode 27.0에서 `expo-video`를 포함한 iOS 개발 빌드가 성공했고 iPhone 16 시뮬레이터에서 앱 실행을 확인했습니다. 프로젝트 경로에 한글이 있어 CocoaPods 실행 시에는 영문 임시 빌드 경로가 필요합니다.
 
-Apple 로그인은 유료 Apple Developer 설정이 필요해 비활성화했으며 앱에서도 노출하지 않습니다. 출시 전 Google 테스트 모드 해제, 두 계정 간 RLS, 사진 업로드, 계정 삭제를 실제 계정으로 확인해야 합니다. 신고/차단/관리자 검토, 공개 댓글, 추천 알고리즘은 아직 구현하지 않았습니다. 맛 기록은 개인 기록입니다. 다중 기기 동시 편집은 마지막 저장 우선이며 충돌 처리는 별도 작업입니다.
+출시 전 Google 테스트 모드 해제, Apple Provider 활성화, 두 계정 간 RLS, 사진 업로드, 신고·차단, 검토 승인·반려, 계정 삭제 후 공개 URL 404를 실제 별도 테스트 계정으로 확인해야 합니다. 신고 검토·처리는 Supabase Dashboard에서 운영자가 수행합니다. 공개 댓글과 추천 알고리즘은 포함하지 않았습니다. 맛 기록은 개인 기록입니다. 다중 기기 동시 편집은 마지막 저장 우선이며 충돌 처리는 별도 작업입니다.
 
-타이머는 앱 활성화 시 실제 경과 시간을 반영하며 백그라운드 알림/음성 안내는 포함하지 않습니다. 정책 문서와 게시물 운영 체계도 출시 전에 준비해야 합니다. 첨부 교체/레시피 삭제 후 사용하지 않는 원격 파일 정리는 별도 작업이며 온라인 계정 삭제에서는 첨부 폴더를 함께 비웁니다.
+타이머는 앱 활성화 시 실제 경과 시간을 반영하며 백그라운드 알림/음성 안내는 포함하지 않습니다. 영상은 선택 단계에서 iOS 호환 중간 품질로 내보내지만, 출시 전 실제 기기에서 위치 메타데이터가 남지 않는지 표본 검사해야 합니다.

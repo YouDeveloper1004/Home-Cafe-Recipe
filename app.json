@@ -10,6 +10,9 @@
     "backgroundColor": "#FFFCF8",
     "ios": {
       "bundleIdentifier": "com.seungmunyou.caferecipes",
+      "appleTeamId": "Q92RDJY668",
+      "buildNumber": "3",
+      "usesAppleSignIn": true,
       "supportsTablet": true
     },
     "android": {
@@ -26,7 +29,16 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "enableSceneSupport": true
+          }
+        }
+      ],
       "expo-web-browser",
+      "expo-apple-authentication",
       "expo-secure-store",
       [
         "expo-image-picker",
