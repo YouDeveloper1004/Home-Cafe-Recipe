@@ -43,20 +43,21 @@ Supabase 무료 프로젝트가 연결되어 있고 초기 스키마, 공개 이
 
 Google은 PKCE로 인증하고 Apple은 네이티브 identity token을 Supabase에 전달합니다. 세션은 SecureStore에 저장합니다. 개인 상태는 본인만 조회할 수 있고, Cafe/게시 레시피는 공개 카탈로그에 분리됩니다. 신고는 작성자만 제출할 수 있고 일반 사용자는 조회할 수 없습니다. 차단 목록은 본인만 읽고 추가·삭제할 수 있습니다.
 
-사진과 단계 영상은 본인 UID 폴더에 업로드합니다. 이미지는 업로드 전에 JPEG로 재인코딩해 원본 EXIF 위치 메타데이터를 제거하고, 저장 후 현재 레시피에서 참조하지 않는 본인 폴더 파일을 정리합니다. 계정 삭제는 먼저 Storage API가 실제 파일을 지우고, 그 작업이 모두 성공한 뒤 계정과 연결 데이터를 삭제합니다. 중간에 실패하면 로컬 세션을 유지하므로 다시 시도할 수 있습니다.
+사진과 단계 영상은 본인 UID 폴더에 업로드합니다. 이미지는 업로드 전에 JPEG로 재인코딩해 원본 EXIF 위치 메타데이터를 제거하고, 저장 후 현재 레시피에서 참조하지 않는 본인 폴더 파일을 정리합니다. Google 계정 삭제는 Storage API가 실제 파일을 지우고 계정과 연결 데이터를 삭제합니다. Apple 계정은 Face ID/Touch ID 재인증 후 Edge Function이 Apple 토큰을 해제하고 Storage와 Auth 계정을 삭제합니다. 중간에 실패하면 로컬 세션을 제거하지 않아 다시 시도할 수 있습니다.
 
 ## Sign in with Apple 설정
 
 코드는 준비되어 있지만 다음 콘솔 설정은 앱 소유자가 직접 완료해야 합니다.
 
-유료 Apple Developer 설정이 끝나기 전에는 `.env.local`의 `EXPO_PUBLIC_APPLE_LOGIN_ENABLED`를 `false`로 유지합니다. 설정과 실기기 검증이 모두 끝난 뒤에만 `true`로 바꾸면 버튼이 노출됩니다. Google 로그인을 제공하는 iOS 앱은 심사 전에 Apple 로그인을 동등하게 제공하거나 iOS의 제3자 소셜 로그인을 제거해야 합니다.
+유료 Apple Developer 설정이 끝나기 전에는 `.env.local`의 `EXPO_PUBLIC_APPLE_LOGIN_ENABLED`를 `false`로 유지합니다. `app.config.js`는 이 값으로 `ios.usesAppleSignIn`과 로그인 UI를 함께 제어합니다. EAS `preview`는 `false`, `production`은 `true`로 고정되어 있어 무료 개발 빌드와 출시 빌드가 섞이지 않습니다. Google 로그인을 제공하는 iOS 앱은 심사 전에 Apple 로그인을 동등하게 제공하거나 iOS의 제3자 소셜 로그인을 제거해야 합니다.
 
 1. Apple Developer에서 앱의 Bundle ID `com.seungmunyou.caferecipes`에 **Sign in with Apple** capability를 켭니다.
 2. Apple Developer의 Certificates, Identifiers & Profiles에서 Sign in with Apple용 Services ID와 Key를 만들고 Team ID, Key ID, 내려받은 `.p8` 키를 안전하게 보관합니다. 키는 다시 내려받을 수 없고 저장소에 커밋하면 안 됩니다.
 3. Supabase Dashboard → Authentication → Providers → Apple에서 Provider를 활성화하고 Client ID/허용 Client ID, Team ID, Key ID와 secret을 입력합니다. 네이티브 앱 토큰을 허용하도록 Bundle ID도 Client ID 목록에 포함합니다.
 4. Authentication → URL Configuration에서 앱 콜백 `caferecipes://auth/callback`을 허용합니다.
 5. `ios.usesAppleSignIn`이 네이티브 권한을 바꾸므로 기존 설치 앱에는 JavaScript 새로고침만으로 반영되지 않습니다. `pnpm ios` 또는 EAS Build로 새 iOS 바이너리를 만들어 실기기에 다시 설치합니다.
-6. 실기기에서 Apple 버튼 → Face ID/Touch ID → 로그인 → `cafe_accounts` 행 생성까지 확인합니다.
+6. Supabase Edge Functions에 `supabase/functions/delete-account`를 배포하고 Function secrets에 `APPLE_TEAM_ID`, `APPLE_CLIENT_ID`(Bundle ID), `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`(.p8 전문)를 등록합니다. 비밀 값은 `.env`, EAS 환경변수, GitHub에 저장하지 않습니다.
+7. 실기기에서 Apple 버튼 → Face ID/Touch ID → 로그인 → `cafe_accounts` 행 생성까지 확인하고, 사진을 올린 뒤 계정 삭제로 Apple 연결·Storage·Auth가 모두 정리되는지 확인합니다.
 
 Apple Developer Program과 App Store 배포에는 Apple의 유료 멤버십이 필요합니다. Supabase Provider의 client secret은 만료 전에 갱신해야 합니다.
 
@@ -67,6 +68,7 @@ Apple Developer Program과 App Store 배포에는 Apple의 유료 멤버십이 �
 - 공개 웹 문서: `docs/` (GitHub Pages에서 main 브랜치의 `/docs` 폴더를 배포)
 - 예상 개인정보처리방침 URL: `https://youdeveloper1004.github.io/Home-Cafe-Recipe/privacy.html`
 - 예상 계정 삭제 URL: `https://youdeveloper1004.github.io/Home-Cafe-Recipe/delete-account.html`
+- 예상 지원 URL: `https://youdeveloper1004.github.io/Home-Cafe-Recipe/support.html`
 - 신고·개인정보 문의: `seungmuny1004@gmail.com`
 - Supabase 데이터 리전: 미국 동부 버지니아(AWS `us-east-1`)
 - 정책 문서는 출시 전 한국 개인정보보호 법률 전문가 검토를 권장합니다.
@@ -85,6 +87,6 @@ GitHub에 변경사항을 올린 뒤 Repository Settings → Pages → Deploy fr
 
 Supabase 인증 설정, Google 공급자 활성화, OAuth 리디렉션, 공개 카탈로그 읽기, 10MB 파일 제한의 사진·영상 저장 형식까지 원격에서 확인했습니다. Xcode 27.0에서 `expo-video`를 포함한 iOS 개발 빌드가 성공했고 iPhone 16 시뮬레이터에서 앱 실행을 확인했습니다. 프로젝트 경로에 한글이 있어 CocoaPods 실행 시에는 영문 임시 빌드 경로가 필요합니다.
 
-출시 전 Google 테스트 모드 해제, Apple Provider 활성화, 두 계정 간 RLS, 사진 업로드, 신고·차단, 검토 승인·반려, 계정 삭제 후 공개 URL 404를 실제 별도 테스트 계정으로 확인해야 합니다. 신고 검토·처리는 Supabase Dashboard에서 운영자가 수행합니다. 공개 댓글과 추천 알고리즘은 포함하지 않았습니다. 맛 기록은 개인 기록입니다. 다중 기기 동시 편집은 마지막 저장 우선이며 충돌 처리는 별도 작업입니다.
+출시 전 Google 테스트 모드 해제, Apple Provider·Edge Function secret 활성화, 두 계정 간 RLS, 사진 업로드, 신고·차단, 검토 승인·반려, Apple 토큰 해제, 계정 삭제 후 공개 URL 404를 실제 별도 테스트 계정으로 확인해야 합니다. 신고 검토·처리는 Supabase Dashboard에서 운영자가 수행합니다. 전체 제출 절차는 `release/app-store-connect-checklist.md`, 심사 메모 초안은 `release/app-review-notes.md`를 따릅니다. 공개 댓글과 추천 알고리즘은 포함하지 않았습니다. 맛 기록은 개인 기록입니다. 다중 기기 동시 편집은 마지막 저장 우선이며 충돌 처리는 별도 작업입니다.
 
 타이머는 앱 활성화 시 실제 경과 시간을 반영하며 백그라운드 알림/음성 안내는 포함하지 않습니다. 영상은 선택 단계에서 iOS 호환 중간 품질로 내보내지만, 출시 전 실제 기기에서 위치 메타데이터가 남지 않는지 표본 검사해야 합니다.

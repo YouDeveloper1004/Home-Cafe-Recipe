@@ -18,6 +18,10 @@ export type LoginProvider = 'google' | 'apple';
 export type ReportTarget = 'cafe' | 'recipe';
 export type ReportReason = '스팸' | '부적절한 콘텐츠' | '저작권 침해' | '기타';
 export type ModerationStatus = {status:'pending'|'approved'|'rejected';reviewNote?:string};
+function hasAppleIdentity(session:Session) {
+  const providers=session.user.app_metadata?.providers;
+  return session.user.app_metadata?.provider==='apple'||(Array.isArray(providers)&&providers.includes('apple'))||session.user.identities?.some(identity=>identity.provider==='apple');
+}
 export async function login(provider: LoginProvider): Promise<Session | null> {
   if (!cloud) throw new Error('로그인 서버 설정이 필요합니다.');
   if(provider==='apple') {
@@ -173,6 +177,21 @@ export async function unblockOwner(ownerId:string) {
 }
 export async function deleteAccount(session:Session) {
   if(!cloud)throw new Error('서버 연결이 없습니다.');
+  if(hasAppleIdentity(session)){
+    let credential:AppleAuthentication.AppleAuthenticationCredential;
+    try {
+      credential=await AppleAuthentication.signInAsync({requestedScopes:[]});
+    }catch(error){
+      if(error instanceof Error&&'code' in error&&(error as Error&{code?:string}).code==='ERR_REQUEST_CANCELED')throw new Error('계정 삭제를 취소했어요. Apple 재인증을 완료해야 삭제할 수 있어요.');
+      throw error;
+    }
+    if(!credential.authorizationCode)throw new Error('Apple 계정 해제에 필요한 인증 코드를 받지 못했어요.');
+    const result=await cloud.functions.invoke('delete-account',{body:{appleAuthorizationCode:credential.authorizationCode},headers:{Authorization:`Bearer ${session.access_token}`}});
+    if(result.error)throw new Error(`Apple 연결을 해제하지 못했어요: ${result.error.message}`);
+    if(!result.data?.deleted)throw new Error(result.data?.error??'계정 삭제가 완료되지 않았어요.');
+    await cloud.auth.signOut({scope:'local'});
+    return;
+  }
   const paths=await cloud.rpc('cafe_account_storage_paths');
   if(paths.error)throw paths.error;
   const names=(paths.data??[]).map((row:{name:string})=>row.name);
@@ -183,4 +202,9 @@ export async function deleteAccount(session:Session) {
   const result=await cloud.rpc('delete_cafe_account');
   if(result.error)throw result.error;
   await cloud.auth.signOut({scope:'local'});
+}
+
+export function onAppleCredentialRevoked(listener:()=>void) {
+  if(!AppleAuthentication.addRevokeListener)return {remove:()=>undefined};
+  return AppleAuthentication.addRevokeListener(listener);
 }

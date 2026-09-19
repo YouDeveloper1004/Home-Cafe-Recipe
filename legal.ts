@@ -1,4 +1,5 @@
 export const SUPPORT_EMAIL='seungmuny1004@gmail.com';
+export const SUPPORT_URL='https://youdeveloper1004.github.io/Home-Cafe-Recipe/support.html';
 export const PRIVACY_OFFICER='RATIO 개인정보보호 담당';
 export const EFFECTIVE_DATE='2026년 9월 18일';
 export const SUPABASE_REGION='미국 동부 버지니아(AWS us-east-1)';

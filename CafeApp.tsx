@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, BackHandler, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
+import { Alert, AppState, BackHandler, Image, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -8,8 +8,8 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CreateCafeScreen, CreateRecipeScreen } from './creator';
 import { back, Cafe, Data, emptyData, normalizeRecipe, Recipe, Route, sampleCafes, sampleRecipes, scaleRecipe, seconds, StepMedia } from './domain';
-import { blockOwner, catalog, cloud, deleteAccount, loadAccount, loadBlockedOwnerIds, loadRecipeModerationStatuses, login, LoginProvider, ModerationStatus, reportContent, ReportReason, saveAccount, unblockOwner } from './cloud';
-import { COMMUNITY_GUIDELINES, isAtLeast14, OVERSEAS_TRANSFER_NOTICE, PRIVACY_POLICY, SUPPORT_EMAIL, TERMS_OF_SERVICE } from './legal';
+import { blockOwner, catalog, cloud, deleteAccount, loadAccount, loadBlockedOwnerIds, loadRecipeModerationStatuses, login, LoginProvider, ModerationStatus, onAppleCredentialRevoked, reportContent, ReportReason, saveAccount, unblockOwner } from './cloud';
+import { COMMUNITY_GUIDELINES, isAtLeast14, OVERSEAS_TRANSFER_NOTICE, PRIVACY_POLICY, SUPPORT_EMAIL, SUPPORT_URL, TERMS_OF_SERVICE } from './legal';
 import type { Session } from '@supabase/supabase-js';
 
 const KEY = '@cafe/app/v2';
@@ -171,6 +171,19 @@ function Application() {
     cloud.auth.startAutoRefresh();
     return ()=>{listener.remove();client.auth.stopAutoRefresh();};
   },[]);
+  useEffect(()=>{
+    if(Platform.OS!=='ios'||!cloud)return;
+    const client=cloud;
+    const subscription=onAppleCredentialRevoked(()=>{void (async()=>{
+      await client.auth.signOut({scope:'local'}).catch(()=>undefined);
+      const stored=await AsyncStorage.getItem(KEY);
+      const local:Data=stored?{...emptyData,...JSON.parse(stored)}:emptyData;
+      const next:Data={...local,recipes:(local.recipes??[]).map(normalizeRecipe),draft:local.draft?normalizeRecipe(local.draft):null};
+      setSession(null);setBlockedOwners([]);setModeration({});setLegalGate(false);dataRef.current=next;setData(next);setName(next.name);reset('home');
+      Alert.alert('Apple 연결이 해제됐어요','계정을 보호하기 위해 로그아웃했습니다.');
+    })();});
+    return ()=>subscription.remove();
+  },[]);
   function consentStamp(online:boolean) {
     const alreadyAccepted=data.termsAcceptedAt&&data.privacyAcceptedAt&&data.ageConfirmedAt&&(!online||data.overseasTransferAcceptedAt);
     if(alreadyAccepted)return {legalAcceptedAt:data.legalAcceptedAt??data.termsAcceptedAt,termsAcceptedAt:data.termsAcceptedAt,privacyAcceptedAt:data.privacyAcceptedAt,overseasTransferAcceptedAt:data.overseasTransferAcceptedAt,ageConfirmedAt:data.ageConfirmedAt};
@@ -327,7 +340,7 @@ function Application() {
         <Text style={s.heading}>맛 기록</Text>{data.reviews.filter(x=>x.recipeId===recipe.id).map(x=><View style={s.panel} key={x.id}><Text>{'★'.repeat(x.rating)} · {x.note}</Text></View>)}
       </>}
       {route.screen==='review'&&recipe&&<><Text style={s.eyebrow}>BREW COMPLETE</Text><Cup/><Text style={s.title}>멋지게 내렸어요!</Text><Text style={s.muted}>{recipe.title} · 오늘의 한 잔은 어땠나요?</Text><View style={s.row}>{[1,2,3,4,5].map(n=><Pressable accessibilityLabel={`${n}점`} key={n} onPress={()=>setRating(n)}><Text style={{fontSize:38,color:n<=rating?orange:'#D9D0C8'}}>★</Text></Pressable>)}</View><Field value={note} onChange={setNote} placeholder="산미, 단맛, 다음번에 바꾸고 싶은 점" multiline/><Button title="맛 기록 저장" onPress={async()=>{if(await commit(d=>({...d,reviews:[{id:String(Date.now()),recipeId:recipe.id,title:recipe.title,rating,note,date:new Date().toISOString()},...d.reviews]})))reset('profile');}}/><Button quiet title="기록 없이 홈으로" onPress={()=>reset('home')}/></>}
-      {route.screen==='settings'&&<>{header('계정 설정')}<Text style={s.muted}>{session?'온라인 계정에 연결되었습니다.':'로컬 프로필 · 이 기기에 저장됩니다.'}</Text>{cloud&&!session&&<>{registrationFields}{appleLoginEnabled&&Platform.OS==='ios'&&<AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK} cornerRadius={8} style={[s.appleButton,(!onlineRegistrationReady||authBusy)&&s.disabled]} onPress={()=>{if(onlineRegistrationReady&&!authBusy)void signIn('apple');}}/>}<Button title="Google로 로그인" onPress={()=>void signIn('google')} disabled={!onlineRegistrationReady||authBusy}/><Text style={s.small}>로컬 기록은 이 기기에 남습니다. 로그인 계정의 기록은 별도로 관리됩니다.</Text></>}<Field value={name} onChange={setName} placeholder="프로필 이름"/><Button title="이름 저장" disabled={!name.trim()} onPress={async()=>{if(await commit(d=>({...d,name:name.trim().slice(0,40)})))pop();}}/><View style={s.row}><Button quiet title="이용약관" onPress={()=>go('legal','terms')}/><Button quiet title="개인정보처리방침" onPress={()=>go('legal','privacy')}/><Button quiet title="국외 이전 안내" onPress={()=>go('legal','overseas')}/><Button quiet title="커뮤니티 운영정책" onPress={()=>go('legal','community')}/></View><Text style={s.small}>신고 처리 및 개인정보 문의: {SUPPORT_EMAIL}</Text>{blockedOwners.length>0&&<><Text style={s.heading}>차단한 Cafe</Text>{blockedOwners.map(id=><View key={id} style={s.row}><Text style={s.muted}>{allCafes.find(c=>c.id===id)?.name??id}</Text><Button quiet title="차단 해제" onPress={()=>void unblockOwner(id).then(()=>setBlockedOwners(ids=>ids.filter(x=>x!==id))).catch(e=>Alert.alert('차단을 해제하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.'))}/></View>)}</>}<Button quiet title={session?'로그아웃':'프로필에서 나가기'} onPress={()=>void signOut()}/>{!session&&<Button quiet title="내 로컬 데이터 삭제" onPress={()=>Alert.alert('내 데이터를 삭제할까요?','Cafe, 레시피, 초안, 팔로우, 저장 및 맛 기록이 기기에서 삭제되며 되돌릴 수 없습니다.',[{text:'취소',style:'cancel'},{text:'삭제',style:'destructive',onPress:async()=>{if(await commit(()=>({...emptyData}))) {setName('');reset('home');}}}])}/>}</>}
+      {route.screen==='settings'&&<>{header('계정 설정')}<Text style={s.muted}>{session?'온라인 계정에 연결되었습니다.':'로컬 프로필 · 이 기기에 저장됩니다.'}</Text>{cloud&&!session&&<>{registrationFields}{appleLoginEnabled&&Platform.OS==='ios'&&<AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK} cornerRadius={8} style={[s.appleButton,(!onlineRegistrationReady||authBusy)&&s.disabled]} onPress={()=>{if(onlineRegistrationReady&&!authBusy)void signIn('apple');}}/>}<Button title="Google로 로그인" onPress={()=>void signIn('google')} disabled={!onlineRegistrationReady||authBusy}/><Text style={s.small}>로컬 기록은 이 기기에 남습니다. 로그인 계정의 기록은 별도로 관리됩니다.</Text></>}<Field value={name} onChange={setName} placeholder="프로필 이름"/><Button title="이름 저장" disabled={!name.trim()} onPress={async()=>{if(await commit(d=>({...d,name:name.trim().slice(0,40)})))pop();}}/><View style={s.row}><Button quiet title="이용약관" onPress={()=>go('legal','terms')}/><Button quiet title="개인정보처리방침" onPress={()=>go('legal','privacy')}/><Button quiet title="국외 이전 안내" onPress={()=>go('legal','overseas')}/><Button quiet title="커뮤니티 운영정책" onPress={()=>go('legal','community')}/></View><View style={s.panel}><Text style={s.cardTitle}>도움말과 문의</Text><Text style={s.small}>신고, 저작권, 개인정보, 계정 삭제 문의를 받고 있어요.</Text><Button quiet title="도움말·문의 페이지" onPress={()=>void Linking.openURL(SUPPORT_URL).catch(()=>Alert.alert('페이지를 열지 못했어요',SUPPORT_URL))}/><Button quiet title="이메일로 문의" onPress={()=>void Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('RATIO 앱 문의')}`).catch(()=>Alert.alert('메일 앱을 열지 못했어요',SUPPORT_EMAIL))}/></View>{blockedOwners.length>0&&<><Text style={s.heading}>차단한 Cafe</Text>{blockedOwners.map(id=><View key={id} style={s.row}><Text style={s.muted}>{allCafes.find(c=>c.id===id)?.name??id}</Text><Button quiet title="차단 해제" onPress={()=>void unblockOwner(id).then(()=>setBlockedOwners(ids=>ids.filter(x=>x!==id))).catch(e=>Alert.alert('차단을 해제하지 못했어요',e instanceof Error?e.message:'다시 시도해 주세요.'))}/></View>)}</>}<Button quiet title={session?'로그아웃':'프로필에서 나가기'} onPress={()=>void signOut()}/>{!session&&<Button quiet title="내 로컬 데이터 삭제" onPress={()=>Alert.alert('내 데이터를 삭제할까요?','Cafe, 레시피, 초안, 팔로우, 저장 및 맛 기록이 기기에서 삭제되며 되돌릴 수 없습니다.',[{text:'취소',style:'cancel'},{text:'삭제',style:'destructive',onPress:async()=>{if(await commit(()=>({...emptyData}))) {setName('');reset('home');}}}])}/>}</>}
     </ScrollView>
     {tab&&<View style={s.nav}>{(['home','search','saved','profile'] as const).map((screen,i)=>{const active=route.screen===screen;return <Pressable key={screen} style={[s.navItem,active&&s.navItemActive]} onPress={()=>reset(screen)}><Text style={[s.navIcon,active&&s.navTextActive]}>{['⌂','⌕','♡','◉'][i]}</Text><Text style={[s.navText,active&&s.navTextActive]}>{['홈','탐색','저장','내 Cafe'][i]}</Text></Pressable>;})}</View>}
   </KeyboardAvoidingView>;

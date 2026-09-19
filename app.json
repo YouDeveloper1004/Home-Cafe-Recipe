@@ -13,7 +13,7 @@
       "bundleIdentifier": "com.seungmunyou.caferecipes",
       "appleTeamId": "Q92RDJY668",
       "buildNumber": "3",
-      "usesAppleSignIn": true,
+      "usesAppleSignIn": false,
       "supportsTablet": true
     },
     "android": {

@@ -9,7 +9,7 @@ global.IS_REACT_ACT_ENVIRONMENT=true;
 const store=new Map(); let rejectSave=false;
 const native={};
 for(const name of ['KeyboardAvoidingView','Pressable','ScrollView','Image','Text','TextInput','View'])native[name]=name;
-Object.assign(native,{Platform:{OS:'ios'},StyleSheet:{create:x=>x},Alert:{alert:()=>{}},Vibration:{vibrate:()=>{}},Share:{share:async()=>{}},BackHandler:{addEventListener:()=>({remove(){}})},AppState:{currentState:'active',addEventListener:()=>({remove(){}})}});
+Object.assign(native,{Platform:{OS:'ios'},StyleSheet:{create:x=>x},Alert:{alert:()=>{}},Vibration:{vibrate:()=>{}},Share:{share:async()=>{}},Linking:{openURL:async()=>{}},BackHandler:{addEventListener:()=>({remove(){}})},AppState:{currentState:'active',addEventListener:()=>({remove(){}})}});
 const originalLoad=Module._load;
 Module._load=function(name,parent,main){
   if(name==='react-native')return native;
@@ -79,8 +79,38 @@ test('moderation migration holds changed recipes for review and rate-limits repo
 test('public store policy pages include privacy and account deletion instructions',()=>{
   const privacy=fs.readFileSync(require.resolve('../docs/privacy.html'),'utf8');
   const deletion=fs.readFileSync(require.resolve('../docs/delete-account.html'),'utf8');
+  const support=fs.readFileSync(require.resolve('../docs/support.html'),'utf8');
   assert.match(privacy,/us-east-1/);assert.match(privacy,/Supabase, Inc\./);
-  assert.match(deletion,/온라인 계정 삭제/);assert.match(deletion,/mailto:/);
+  assert.match(deletion,/온라인 계정 삭제/);assert.match(deletion,/Apple 연결 토큰 해제/);assert.match(deletion,/mailto:/);
+  assert.match(support,/도움말과 문의/);assert.match(support,/mailto:/);assert.match(support,/신고와 차단/);
+});
+test('Apple account deletion reauthenticates, revokes the provider token, removes storage and then deletes Auth',()=>{
+  const cloudSource=fs.readFileSync(require.resolve('../cloud.ts'),'utf8');
+  const edge=fs.readFileSync(require.resolve('../supabase/functions/delete-account/index.ts'),'utf8');
+  assert.match(cloudSource,/credential\.authorizationCode/);
+  assert.match(cloudSource,/functions\.invoke\('delete-account'/);
+  assert.match(edge,/appleid\.apple\.com\/auth\/token/);
+  assert.match(edge,/appleid\.apple\.com\/auth\/revoke/);
+  assert.match(edge,/returnedAppleSubject!==expectedAppleSubject/);
+  assert.ok(edge.indexOf("storage.from('recipe-images').remove")<edge.indexOf('await revokeAppleToken'));
+  assert.ok(edge.indexOf('await revokeAppleToken')<edge.indexOf('admin.auth.admin.deleteUser'));
+});
+test('release configuration exposes Apple sign-in only in the production build',()=>{
+  const config=fs.readFileSync(require.resolve('../app.config.js'),'utf8');
+  const eas=JSON.parse(fs.readFileSync(require.resolve('../eas.json'),'utf8'));
+  assert.match(config,/ios:\{\.\.\.config\.ios,usesAppleSignIn:appleLoginEnabled\}/);
+  assert.equal(eas.build.preview.env.EXPO_PUBLIC_APPLE_LOGIN_ENABLED,'false');
+  assert.equal(eas.build.production.env.EXPO_PUBLIC_APPLE_LOGIN_ENABLED,'true');
+});
+test('support is directly reachable in-app and no advertising or tracking SDK is configured',()=>{
+  const app=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
+  const pkg=fs.readFileSync(require.resolve('../package.json'),'utf8');
+  const config=fs.readFileSync(require.resolve('../app.json'),'utf8');
+  assert.match(app,/도움말·문의 페이지/);
+  assert.match(app,/Linking\.openURL\(SUPPORT_URL\)/);
+  assert.match(app,/mailto:/);
+  assert.doesNotMatch(pkg,/admob|tracking-transparency|facebook-sdk/i);
+  assert.doesNotMatch(config,/NSUserTrackingUsageDescription|userTrackingPermission/i);
 });
 test('step photos and short videos are wired through editor, player and cloud upload',()=>{
   const creator=fs.readFileSync(require.resolve('../creator.tsx'),'utf8');
