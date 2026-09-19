@@ -2,6 +2,7 @@
   "expo": {
     "name": "Cafe",
     "slug": "cafe",
+    "owner": "cafe_home_maker",
     "scheme": "caferecipes",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -48,6 +49,11 @@
           "microphonePermission": false
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ac33749a-462f-40b5-aa36-b2aaa99fcb2d"
+      }
+    }
   }
 }
