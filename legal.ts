@@ -1,6 +1,6 @@
 export const SUPPORT_EMAIL='seungmuny1004@gmail.com';
 export const SUPPORT_URL='https://youdeveloper1004.github.io/Home-Cafe-Recipe/support.html';
-export const PRIVACY_OFFICER='RATIO 개인정보보호 담당';
+export const PRIVACY_OFFICER='Bean Chillin 개인정보보호 담당';
 export const EFFECTIVE_DATE='2026년 9월 21일';
 export const SUPABASE_REGION='미국 동부 버지니아(AWS us-east-1)';
 
@@ -14,11 +14,11 @@ export function isAtLeast14(value:string,now=new Date()):boolean {
   return born.getTime()<=now.getTime();
 }
 
-export const PRIVACY_POLICY=`RATIO 개인정보처리방침
+export const PRIVACY_POLICY=`Bean Chillin 개인정보처리방침
 
 시행일: ${EFFECTIVE_DATE}
 
-RATIO 운영자(이하 “운영자”)는 개인정보 보호법 등 관련 법령을 준수하며 이용자의 개인정보를 안전하게 처리합니다.
+Bean Chillin 운영자(이하 “운영자”)는 개인정보 보호법 등 관련 법령을 준수하며 이용자의 개인정보를 안전하게 처리합니다.
 
 1. 수집하는 정보
 • Google 또는 Apple 로그인: 이메일 주소, 소셜 로그인 식별자, 제공된 경우 이름과 프로필 사진
@@ -48,7 +48,7 @@ RATIO 운영자(이하 “운영자”)는 개인정보 보호법 등 관련 법
 RLS 접근 통제, 사용자별 비공개 Storage 경로, 승인 파일의 제한 시간 주소, 전송 구간 암호화, Android 백업 비활성화와 최소 권한 원칙을 적용합니다. 서비스 역할 키는 앱에 포함하지 않습니다.
 
 9. 만 14세 미만
-RATIO는 만 14세 미만 이용자의 가입을 허용하지 않습니다.
+Bean Chillin는 만 14세 미만 이용자의 가입을 허용하지 않습니다.
 
 10. 개인정보 보호 담당 및 문의처
 담당 부서: ${PRIVACY_OFFICER}
@@ -69,11 +69,11 @@ export const OVERSEAS_TRANSFER_NOTICE=[
 ].join('\n');
 
 export const COMMUNITY_GUIDELINES=[
-  'RATIO 커뮤니티 운영정책',
+  'Bean Chillin 커뮤니티 운영정책',
   '',
   '시행일: '+EFFECTIVE_DATE,
   '',
-  'RATIO는 커피 레시피를 안전하게 나누는 공간입니다. 다음 콘텐츠는 게시할 수 없습니다.',
+  'Bean Chillin는 커피 레시피를 안전하게 나누는 공간입니다. 다음 콘텐츠는 게시할 수 없습니다.',
   '',
   '• 불법행위, 도박, 마약 거래 또는 위험행위를 조장하는 콘텐츠',
   '• 음란물, 혐오·괴롭힘·위협, 타인의 개인정보를 노출하는 콘텐츠',
@@ -86,18 +86,18 @@ export const COMMUNITY_GUIDELINES=[
   '신고는 앱의 Cafe·레시피 화면에서 제출할 수 있습니다. 저작권 또는 긴급 신고에는 대상 URL·권리 관계·연락 가능한 이메일을 포함해 '+SUPPORT_EMAIL+'로 보내 주세요. 운영자는 가능한 한 신속하게 검토하며, 중대한 안전 신고를 우선 처리합니다. 반복 위반자는 서비스 이용이 제한될 수 있습니다.',
 ].join('\n');
 
-export const TERMS_OF_SERVICE=`RATIO 이용약관
+export const TERMS_OF_SERVICE=`Bean Chillin 이용약관
 
 시행일: ${EFFECTIVE_DATE}
 
 1. 목적
-본 약관은 RATIO가 제공하는 커피 레시피 작성, 공유, 저장과 추출 안내 서비스의 이용 조건을 정합니다.
+본 약관은 Bean Chillin가 제공하는 커피 레시피 작성, 공유, 저장과 추출 안내 서비스의 이용 조건을 정합니다.
 
 2. 가입과 계정
 이용자는 정확한 정보를 제공하고 자신의 계정을 안전하게 관리해야 합니다. 만 14세 미만은 가입할 수 없습니다. 타인의 계정 또는 권리를 침해하는 방식으로 서비스를 이용해서는 안 됩니다.
 
 3. 이용자 콘텐츠와 라이선스
-이용자가 업로드한 레시피, 글, 사진과 영상의 저작권은 이용자 또는 정당한 권리자에게 있습니다. 이용자는 서비스 운영, 저장, 전송, 화면 표시, 검색과 공유 기능 제공에 필요한 범위에서 RATIO에 비독점적·무상·전세계적 이용 라이선스를 부여합니다. 계정 또는 콘텐츠 삭제 시 합리적인 백업·법적 보존 범위를 제외하고 해당 라이선스는 종료됩니다.
+이용자가 업로드한 레시피, 글, 사진과 영상의 저작권은 이용자 또는 정당한 권리자에게 있습니다. 이용자는 서비스 운영, 저장, 전송, 화면 표시, 검색과 공유 기능 제공에 필요한 범위에서 Bean Chillin에 비독점적·무상·전세계적 이용 라이선스를 부여합니다. 계정 또는 콘텐츠 삭제 시 합리적인 백업·법적 보존 범위를 제외하고 해당 라이선스는 종료됩니다.
 
 4. 금지행위
 불법·유해·혐오·음란·폭력적 콘텐츠, 스팸, 사칭, 괴롭힘, 개인정보 노출, 저작권·상표권 등 타인의 권리 침해, 악성 코드, 서비스 방해, 허가 없는 상업적 자동 수집을 금지합니다. 안전을 해치는 커피 제조 지침이나 허위 정보 게시도 금지합니다.

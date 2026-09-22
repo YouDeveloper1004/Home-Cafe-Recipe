@@ -1,9 +1,9 @@
-# RATIO 자산 출처 기록
+# Bean Chillin 자산 출처 기록
 
 최종 갱신: 2026-09-21
 
-- `assets/icon.png`, Android 적응형 아이콘과 splash 자산: RATIO용으로 직접 제작·수정.
-- `assets/demo-recipe/`, `assets/samples/`, `assets/seed-recipes/`: RATIO의 커피 레시피 시연을 위해 생성형 이미지 도구로 새로 생성한 뒤 프로젝트 요구에 맞춰 사람이 선별·크롭·압축.
+- `assets/icon.png`, Android 적응형 아이콘과 splash 자산: Bean Chillin용으로 직접 제작·수정.
+- `assets/demo-recipe/`, `assets/samples/`, `assets/seed-recipes/`: Bean Chillin의 커피 레시피 시연을 위해 생성형 이미지 도구로 새로 생성한 뒤 프로젝트 요구에 맞춰 사람이 선별·크롭·압축.
 - 레시피 이름, 설명, 원두 조합과 추출 단계: 프로젝트 기능 검증용으로 새로 작성하고 사람이 검토·수정.
 - 제3자의 상표나 실제 판매 제품을 공식 제휴처럼 표시하지 않으며, 제품명이 예시로 등장할 경우 사실 확인과 권리 검토 후 공개한다.
 

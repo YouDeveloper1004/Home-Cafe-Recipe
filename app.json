@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Cafe",
+    "name": "Bean Chillin",
     "slug": "cafe",
     "owner": "cafe_home_maker",
     "scheme": "caferecipes",
@@ -12,13 +12,13 @@
     "ios": {
       "bundleIdentifier": "com.seungmunyou.caferecipes",
       "appleTeamId": "Q92RDJY668",
-      "buildNumber": "5",
+      "buildNumber": "6",
       "usesAppleSignIn": false,
       "supportsTablet": true
     },
     "android": {
       "package": "com.seungmunyou.caferecipes",
-      "versionCode": 7,
+      "versionCode": 8,
       "allowBackup": false,
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW",

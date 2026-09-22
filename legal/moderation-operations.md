@@ -1,4 +1,4 @@
-# RATIO 신고·콘텐츠 검토 운영 절차
+# Bean Chillin 신고·콘텐츠 검토 운영 절차
 
 이 문서는 운영자 전용입니다. 앱에 `service_role` 키를 넣지 말고 Supabase Dashboard의 SQL Editor에서만 처리합니다.
 

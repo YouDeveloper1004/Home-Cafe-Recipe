@@ -1,4 +1,4 @@
-# RATIO App Store Connect 제출 체크리스트
+# Bean Chillin App Store Connect 제출 체크리스트
 
 ## 메타데이터 URL
 
@@ -28,7 +28,7 @@ GitHub Pages에 최신 `docs/`가 반영된 뒤 로그아웃 상태의 브라우
 3. Supabase Authentication에서 사용자가 사라지고 Storage의 UID 폴더가 빈 것을 확인한다.
 4. 기존 공개 이미지 URL이 400/401/404 중 하나로 접근 거부되는지 확인한다.
 5. Apple 테스트 계정에서 같은 과정을 반복하고 Face ID 재인증 후 삭제되는지 확인한다.
-6. Apple ID 설정의 `Apple로 로그인`에서 RATIO 연결이 해제됐는지 확인한다.
+6. Apple ID 설정의 `Apple로 로그인`에서 Bean Chillin 연결이 해제됐는지 확인한다.
 
 ## UGC 심사 검증
 
