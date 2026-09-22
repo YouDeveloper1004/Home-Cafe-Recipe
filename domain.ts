@@ -1,14 +1,17 @@
-export type StepMedia = { type: 'image' | 'video'; uri: string; duration?: number };
+export type StorageBucket = 'recipe-media-private' | 'recipe-images';
+export type StepMedia = { type: 'image' | 'video'; uri: string; duration?: number; storagePath?: string; storageBucket?: StorageBucket };
 export type Step = { id: string; type: 'action' | 'timer'; title: string; value: string; media?: StepMedia };
 export type RoastLevel = '라이트' | '미디엄' | '다크';
 export type BeanRecommendation = { product: string; roaster?: string; origin?: string; process?: string; roast?: RoastLevel; dose: string; note?: string };
 export type Cafe = { id: string; name: string; handle: string; bio: string; color: string };
-export type Recipe = { id: string; title: string; description: string; equipment: string; beans: string; bean?: BeanRecommendation; baseVolumeMl: number; water: string; temperature: string; duration: string; steps: Step[]; publishedAt: string; photo?: string; cafeId?: string };
+export type Recipe = { id: string; title: string; description: string; equipment: string; beans: string; bean?: BeanRecommendation; baseVolumeMl: number; water: string; temperature: string; duration: string; steps: Step[]; publishedAt: string; photo?: string; photoStoragePath?: string; photoStorageBucket?: StorageBucket; cafeId?: string };
 export type Review = { id: string; recipeId: string; title: string; rating: number; note: string; date: string };
 export type Data = { cafe: Cafe | null; recipes: Recipe[]; draft: Recipe | null; saved: string[]; following: string[]; reviews: Review[]; name: string; active: boolean; legalAcceptedAt: string; termsAcceptedAt: string; privacyAcceptedAt: string; overseasTransferAcceptedAt: string; ageConfirmedAt: string };
 export const emptyData: Data = { cafe: null, recipes: [], draft: null, saved: [], following: [], reviews: [], name: '', active: false, legalAcceptedAt: '', termsAcceptedAt: '', privacyAcceptedAt: '', overseasTransferAcceptedAt: '', ageConfirmedAt: '' };
 export function seconds(value: string): number {
   const text = value.trim();
+  const hours=/^(\d+(?:\.\d+)?)시간$/.exec(text);
+  if(hours)return Math.round(parseFloat(hours[1])*3600);
   if (/^\d{1,2}:[0-5]\d$/.test(text)) { const [m, s] = text.split(':').map(Number); return m * 60 + s; }
   if (!/^\d+(초|s)?$/.test(text)) return 0;
   return parseInt(text, 10);

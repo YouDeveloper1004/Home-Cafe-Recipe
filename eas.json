@@ -8,7 +8,10 @@
       "distribution": "internal",
       "environment": "preview",
       "env": {
-        "EXPO_PUBLIC_APPLE_LOGIN_ENABLED": "false"
+        "EXPO_PUBLIC_APPLE_LOGIN_ENABLED": "false",
+        "EXPO_PUBLIC_SEED_CONTENT_ENABLED": "true",
+        "EXPO_PUBLIC_LOCAL_PROFILE_ENABLED": "true",
+        "EXPO_PUBLIC_VIDEO_UPLOAD_ENABLED": "false"
       },
       "android": {
         "buildType": "apk"
@@ -17,7 +20,10 @@
     "production": {
       "environment": "production",
       "env": {
-        "EXPO_PUBLIC_APPLE_LOGIN_ENABLED": "true"
+        "EXPO_PUBLIC_APPLE_LOGIN_ENABLED": "true",
+        "EXPO_PUBLIC_SEED_CONTENT_ENABLED": "false",
+        "EXPO_PUBLIC_LOCAL_PROFILE_ENABLED": "false",
+        "EXPO_PUBLIC_VIDEO_UPLOAD_ENABLED": "false"
       },
       "android": {
         "buildType": "app-bundle"

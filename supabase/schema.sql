@@ -49,12 +49,53 @@ grant execute on function public.save_cafe_account(jsonb) to authenticated;
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
 values ('recipe-images','recipe-images',true,10485760,array['image/jpeg','image/png','image/webp','video/mp4','video/quicktime','video/3gpp'])
 on conflict(id) do update set file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
-create policy "own image upload" on storage.objects for insert to authenticated
-with check (bucket_id='recipe-images' and (storage.foldername(name))[1]=auth.uid()::text);
+update storage.buckets set public=false where id='recipe-images';
 create policy "own image deletion" on storage.objects for delete to authenticated
 using (bucket_id='recipe-images' and (storage.foldername(name))[1]=auth.uid()::text);
 create policy "own image listing" on storage.objects for select to authenticated
 using (bucket_id='recipe-images' and (storage.foldername(name))[1]=auth.uid()::text);
+
+-- New uploads are private. The legacy public bucket above remains only so an
+-- existing installation can migrate without breaking already-published media.
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values ('recipe-media-private','recipe-media-private',false,10485760,array['image/jpeg','image/png','image/webp'])
+on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+
+create function public.can_upload_recipe_media(object_name text) returns boolean
+language sql security definer set search_path='' stable as $$
+  select auth.uid() is not null
+    and (storage.foldername(object_name))[1]=auth.uid()::text
+    and (select count(*) from storage.objects where bucket_id='recipe-media-private'
+      and (storage.foldername(name))[1]=auth.uid()::text)<100
+    and coalesce((select sum(coalesce((metadata->>'size')::bigint,0)) from storage.objects
+      where bucket_id='recipe-media-private' and (storage.foldername(name))[1]=auth.uid()::text),0)<262144000
+$$;
+revoke all on function public.can_upload_recipe_media(text) from public, anon;
+grant execute on function public.can_upload_recipe_media(text) to authenticated;
+
+create function public.is_approved_recipe_media(object_name text) returns boolean
+language sql security definer set search_path='' stable as $$
+  select exists(select 1 from public.cafe_catalog as catalog
+    cross join lateral jsonb_array_elements(catalog.recipes) as recipe(value)
+    where recipe.value->>'photo'='ratio-media://'||object_name
+      or recipe.value->>'photo'='ratio-legacy-media://'||object_name
+      or position('/storage/v1/object/public/recipe-images/'||object_name in coalesce(recipe.value->>'photo',''))>0
+      or exists(select 1 from jsonb_array_elements(recipe.value->'steps') as step(value)
+        where step.value->'media'->>'uri'='ratio-media://'||object_name
+          or step.value->'media'->>'uri'='ratio-legacy-media://'||object_name
+          or position('/storage/v1/object/public/recipe-images/'||object_name in coalesce(step.value->'media'->>'uri',''))>0))
+$$;
+revoke all on function public.is_approved_recipe_media(text) from public;
+grant execute on function public.is_approved_recipe_media(text) to anon, authenticated;
+
+create policy "private recipe media upload" on storage.objects for insert to authenticated
+with check(bucket_id='recipe-media-private' and public.can_upload_recipe_media(name));
+create policy "private recipe media read" on storage.objects for select to anon, authenticated
+using(bucket_id='recipe-media-private' and ((storage.foldername(name))[1]=auth.uid()::text or public.is_approved_recipe_media(name)));
+create policy "private recipe media delete" on storage.objects for delete to authenticated
+using(bucket_id='recipe-media-private' and (storage.foldername(name))[1]=auth.uid()::text);
+create policy "approved legacy recipe media read" on storage.objects for select to anon, authenticated
+using(bucket_id='recipe-images' and public.is_approved_recipe_media(name));
 
 -- Release-readiness migration: reports are write-only to users. Service-role users
 -- can review them in the Supabase dashboard because service-role bypasses RLS.
@@ -121,10 +162,10 @@ grant select, insert, delete on public.blocks to authenticated;
 
 -- The client passes these exact names to the Storage API, which removes both the
 -- physical objects and their metadata. Returning names also covers future nested folders.
-create function public.cafe_account_storage_paths() returns table(name text)
+create function public.cafe_account_storage_paths() returns table(bucket_id text,name text)
 language sql security definer set search_path = '' stable as $$
-  select objects.name from storage.objects as objects
-  where objects.bucket_id='recipe-images'
+  select objects.bucket_id,objects.name from storage.objects as objects
+  where objects.bucket_id in ('recipe-images','recipe-media-private')
     and (storage.foldername(objects.name))[1]=auth.uid()::text
 $$;
 revoke all on function public.cafe_account_storage_paths() from public, anon;
@@ -138,7 +179,7 @@ begin
   -- Storage API deletion happens first in the client. This removes any leftover
   -- metadata before deleting the user and makes public URLs return 404.
   delete from storage.objects
-  where bucket_id='recipe-images' and (storage.foldername(name))[1]=uid::text;
+  where bucket_id in ('recipe-images','recipe-media-private') and (storage.foldername(name))[1]=uid::text;
   delete from auth.users where id=uid;
 end $$;
 revoke all on function public.delete_cafe_account() from public, anon;

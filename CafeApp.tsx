@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, BackHandler, Image, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
+import { Alert, AppState, BackHandler, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, Vibration, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -10,10 +10,13 @@ import { CreateCafeScreen, CreateRecipeScreen } from './creator';
 import { back, Cafe, Data, emptyData, normalizeRecipe, Recipe, Route, sampleCafes, sampleRecipes, scaleRecipe, seconds, StepMedia } from './domain';
 import { blockOwner, catalog, cloud, deleteAccount, loadAccount, loadBlockedOwnerIds, loadRecipeModerationStatuses, login, LoginProvider, ModerationStatus, onAppleCredentialRevoked, reportContent, ReportReason, saveAccount, unblockOwner } from './cloud';
 import { COMMUNITY_GUIDELINES, isAtLeast14, OVERSEAS_TRANSFER_NOTICE, PRIVACY_POLICY, SUPPORT_EMAIL, SUPPORT_URL, TERMS_OF_SERVICE } from './legal';
+import { loadOfficialSeedRecipes } from './seed-recipes';
 import type { Session } from '@supabase/supabase-js';
 
 const KEY = '@cafe/app/v2';
 const appleLoginEnabled=process.env.EXPO_PUBLIC_APPLE_LOGIN_ENABLED==='true';
+const seedContentEnabled=process.env.EXPO_PUBLIC_SEED_CONTENT_ENABLED==='true';
+const localProfileEnabled=process.env.EXPO_PUBLIC_LOCAL_PROFILE_ENABLED==='true';
 const paper = '#F7F1E8', orange = '#B8674B', ink = '#2B241F';
 const sampleRecipeImages: Record<string, number> = {
   'sample-v60': require('./assets/samples/v60-peach.png'),
@@ -29,6 +32,94 @@ function Field({value,onChange,placeholder,multiline=false}: {value:string;onCha
 }
 function Consent({checked,onPress,label}: {checked:boolean;onPress:()=>void;label:string}) {
   return <Pressable accessibilityRole="checkbox" accessibilityState={{checked}} onPress={onPress} style={s.consentRow}><Text style={s.checkbox}>{checked?'✓':' '}</Text><Text style={s.consentText}>{label}</Text></Pressable>;
+}
+function birthDateFrom(value:string) {
+  const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if(!match)return null;
+  const [,year,month,day]=match.map(Number);
+  const date=new Date(year,month-1,day,12);
+  return date.getFullYear()===year&&date.getMonth()===month-1&&date.getDate()===day?date:null;
+}
+function birthDateValue(date:Date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+function birthDateLabel(value:string) {
+  const date=birthDateFrom(value);
+  return date?`${date.getFullYear()}년 ${date.getMonth()+1}월 ${date.getDate()}일`:'생년월일 선택';
+}
+const WHEEL_ITEM_HEIGHT=44;
+function WheelColumn({label,options,value,onChange}:{label:string;options:number[];value:number;onChange:(value:number)=>void}) {
+  const selectedIndex=Math.max(0,options.indexOf(value));
+  return <View style={s.wheelColumn}>
+    <Text style={s.wheelLabel}>{label}</Text>
+    <View style={s.wheelWindow}>
+      <View pointerEvents="none" style={s.wheelSelection}/>
+      <ScrollView
+        key={`${label}-${value}-${options.length}`}
+        accessibilityLabel={`${label} 선택`}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={WHEEL_ITEM_HEIGHT}
+        decelerationRate="fast"
+        contentOffset={{x:0,y:selectedIndex*WHEEL_ITEM_HEIGHT}}
+        contentContainerStyle={s.wheelContent}
+        onMomentumScrollEnd={event=>{
+          const index=Math.max(0,Math.min(options.length-1,Math.round(event.nativeEvent.contentOffset.y/WHEEL_ITEM_HEIGHT)));
+          onChange(options[index]);
+        }}>
+        {options.map(option=><Pressable key={option} accessibilityRole="button" accessibilityLabel={`${option}${label}`} onPress={()=>onChange(option)} style={s.wheelItem}>
+          <Text style={[s.wheelItemText,option===value&&s.wheelItemSelected]}>{option}</Text>
+        </Pressable>)}
+      </ScrollView>
+    </View>
+  </View>;
+}
+function BirthDateField({value,onChange}:{value:string;onChange:(value:string)=>void}) {
+  const today=new Date();
+  const latest=new Date(today.getFullYear()-14,today.getMonth(),today.getDate(),12);
+  const initial=()=>birthDateFrom(value)??new Date(today.getFullYear()-20,today.getMonth(),today.getDate(),12);
+  const starting=initial();
+  const [visible,setVisible]=useState(false);
+  const [draftYear,setDraftYear]=useState(starting.getFullYear());
+  const [draftMonth,setDraftMonth]=useState(starting.getMonth()+1);
+  const [draftDay,setDraftDay]=useState(starting.getDate());
+  const years=Array.from({length:latest.getFullYear()-1899},(_,index)=>latest.getFullYear()-index);
+  const months=Array.from({length:draftYear===latest.getFullYear()?latest.getMonth()+1:12},(_,index)=>index+1);
+  const monthDays=new Date(draftYear,draftMonth,0).getDate();
+  const dayLimit=draftYear===latest.getFullYear()&&draftMonth===latest.getMonth()+1?Math.min(monthDays,latest.getDate()):monthDays;
+  const days=Array.from({length:dayLimit},(_,index)=>index+1);
+  const selectYear=(year:number)=>{
+    const month=Math.min(draftMonth,year===latest.getFullYear()?latest.getMonth()+1:12);
+    const maxDay=Math.min(new Date(year,month,0).getDate(),year===latest.getFullYear()&&month===latest.getMonth()+1?latest.getDate():31);
+    setDraftYear(year);setDraftMonth(month);setDraftDay(Math.min(draftDay,maxDay));
+  };
+  const selectMonth=(month:number)=>{
+    const maxDay=Math.min(new Date(draftYear,month,0).getDate(),draftYear===latest.getFullYear()&&month===latest.getMonth()+1?latest.getDate():31);
+    setDraftMonth(month);setDraftDay(Math.min(draftDay,maxDay));
+  };
+  const open=()=>{
+    const next=initial();
+    setDraftYear(next.getFullYear());setDraftMonth(next.getMonth()+1);setDraftDay(next.getDate());setVisible(true);
+  };
+  return <View style={s.birthField}>
+    <Text style={s.birthLabel}>생년월일 · 필수</Text>
+    <Pressable accessibilityRole="button" accessibilityLabel="생년월일 선택" onPress={open} style={s.birthButton}>
+      <Text style={value?s.birthValue:s.birthPlaceholder}>{birthDateLabel(value)}</Text><Text style={s.birthIcon}>▿</Text>
+    </Pressable>
+    <Text style={s.small}>만 14세 이상 여부만 확인하며, 선택한 날짜는 서버에 저장하지 않아요.</Text>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={()=>setVisible(false)}>
+      <Pressable style={s.dateBackdrop} onPress={()=>setVisible(false)}>
+        <Pressable style={s.dateSheet} onPress={event=>event.stopPropagation()}>
+          <View style={s.dateSheetHeader}><Pressable onPress={()=>setVisible(false)}><Text style={s.dateCancel}>취소</Text></Pressable><Text style={s.dateTitle}>생년월일</Text><Pressable onPress={()=>{onChange(birthDateValue(new Date(draftYear,draftMonth-1,draftDay,12)));setVisible(false);}}><Text style={s.dateDone}>선택 완료</Text></Pressable></View>
+          <Text style={s.dateSummary}>{draftYear}년 {draftMonth}월 {draftDay}일</Text>
+          <View style={s.wheels}>
+            <WheelColumn label="년" options={years} value={draftYear} onChange={selectYear}/>
+            <WheelColumn label="월" options={months} value={draftMonth} onChange={selectMonth}/>
+            <WheelColumn label="일" options={days} value={draftDay} onChange={setDraftDay}/>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  </View>;
 }
 function SearchField({initialValue,onChange}: {initialValue:string;onChange:(v:string)=>void}) {
   return <View style={s.searchField}><Text style={s.searchIcon}>⌕</Text><TextInput
@@ -189,7 +280,7 @@ function Application() {
     if(alreadyAccepted)return {legalAcceptedAt:data.legalAcceptedAt??data.termsAcceptedAt,termsAcceptedAt:data.termsAcceptedAt,privacyAcceptedAt:data.privacyAcceptedAt,overseasTransferAcceptedAt:data.overseasTransferAcceptedAt,ageConfirmedAt:data.ageConfirmedAt};
     if(!termsAccepted||!privacyAccepted){Alert.alert('필수 동의가 필요해요','이용약관과 개인정보처리방침을 각각 확인하고 동의해 주세요.');return null;}
     if(online&&!overseasAccepted){Alert.alert('국외 이전 확인이 필요해요','온라인 계정은 Supabase 미국 리전에 저장됩니다. 동의하지 않으면 로컬 체험을 이용할 수 있어요.');return null;}
-    if(!isAtLeast14(birthDate)){Alert.alert('가입할 수 없어요','만 14세 이상만 가입할 수 있습니다. 생년월일을 YYYY-MM-DD 형식으로 확인해 주세요.');return null;}
+    if(!isAtLeast14(birthDate)){Alert.alert('가입할 수 없어요','생년월일을 선택해 주세요. RATIO는 만 14세 이상만 가입할 수 있어요.');return null;}
     const now=new Date().toISOString();return {legalAcceptedAt:now,termsAcceptedAt:now,privacyAcceptedAt:now,overseasTransferAcceptedAt:online?now:'',ageConfirmedAt:now};
   }
   async function signIn(provider:LoginProvider) {
@@ -246,6 +337,19 @@ function Application() {
     catch(e) {Alert.alert('저장하지 못했어요',session && e instanceof Error ? e.message : '입력 내용은 화면에 남아 있어요. 다시 시도해 주세요.');return false;}
     finally {saving.current=false;}
   }
+  async function addOfficialSeedContent() {
+    if(!session||!data.cafe)return;
+    try {
+      const seeds=await loadOfficialSeedRecipes(data.cafe.id);
+      const additions=seeds.filter(seed=>!data.recipes.some(recipe=>recipe.id===seed.id));
+      if(!additions.length){Alert.alert('이미 등록되어 있어요','초기 공식 레시피 10개가 모두 이 Cafe에 있습니다.');return;}
+      if(await commit(current=>({...current,recipes:[...additions,...current.recipes]}))) {
+        Alert.alert('공식 레시피를 등록했어요',`${additions.length}개 레시피와 표지 이미지를 저장했습니다. 검토 승인 후 다른 사용자에게 공개됩니다.`);
+      }
+    } catch(error) {
+      Alert.alert('초기 레시피를 등록하지 못했어요',error instanceof Error?error.message:'다시 시도해 주세요.');
+    }
+  }
   function requireAccount(action:()=>void) {if(data.active)action();else {reset('profile');Alert.alert('내 프로필을 먼저 만들어 주세요','이 기기에서 사용할 이름을 입력하면 Cafe를 만들고 레시피를 저장할 수 있어요.');}}
   const create=()=>requireAccount(()=>go(data.cafe?'editor':'createCafe'));
   const toggle=(key:'saved'|'following',id:string)=>requireAccount(()=>{void commit(d=>({...d,[key]:d[key].includes(id)?d[key].filter(x=>x!==id):[...d[key],id]}));});
@@ -276,7 +380,7 @@ function Application() {
     finally{setAuthBusy(false);}
   }
   const registrationFields=<>
-    <Field value={birthDate} onChange={setBirthDate} placeholder="생년월일 (YYYY-MM-DD)"/>
+    <BirthDateField value={birthDate} onChange={setBirthDate}/>
     {!!birthDate&&!isAtLeast14(birthDate)&&<Text style={s.validation}>만 14세 이상만 가입할 수 있습니다.</Text>}
     <Consent checked={termsAccepted} onPress={()=>setTermsAccepted(value=>!value)} label="이용약관에 동의합니다 (필수)"/>
     <Consent checked={privacyAccepted} onPress={()=>setPrivacyAccepted(value=>!value)} label="개인정보 수집·이용에 동의합니다 (필수)"/>
@@ -324,8 +428,8 @@ function Application() {
       {route.screen==='saved'&&<><Text style={s.title}>다시 내리고 싶은 커피</Text>{cards(recipes.filter(r=>data.saved.includes(r.id)))}</>}
       {route.screen==='profile'&&<>
         <View style={s.row}><Text style={s.title}>내 Cafe</Text><Button quiet title="설정" onPress={()=>go('settings')}/></View>
-        {!data.active?<><Text style={s.heading}>나만의 커피 기록을 시작해요</Text><Text style={s.muted}>만 14세 이상만 가입할 수 있으며, 시작하기 전에 필수 항목을 확인해 주세요.</Text>{registrationFields}{cloud&&appleLoginEnabled&&Platform.OS==='ios'&&<AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK} cornerRadius={8} style={[s.appleButton,(!onlineRegistrationReady||authBusy)&&s.disabled]} onPress={()=>{if(onlineRegistrationReady&&!authBusy)void signIn('apple');}}/>}{cloud&&<Button title="Google로 계속하기" disabled={!onlineRegistrationReady||authBusy} onPress={()=>void signIn('google')}/>}<Field value={name} onChange={setName} placeholder="사용할 이름"/><Button title="로컬 프로필로 시작" disabled={!name.trim()||!localRegistrationReady||authBusy} onPress={()=>void startLocalProfile()}/><Text style={s.small}>국외 이전에 동의하지 않아도 로컬 체험은 이용할 수 있습니다. 로컬 데이터는 이 기기에만 저장됩니다.</Text></>:<><Text style={s.heading}>{data.name}님의 커피 공간</Text><Text style={s.small}>{session?'계정에 연결됨 · 온라인 저장':'로컬 프로필 · 이 기기에 저장'}</Text>
-          {data.cafe?<><Pressable style={[s.hero,{backgroundColor:data.cafe.color}]} onPress={()=>openCafe(data.cafe!.id)}><Text style={s.heroTitle}>{data.cafe.name}</Text><Text style={s.white}>@{data.cafe.handle}</Text><Text style={s.white}>{data.cafe.bio}</Text><Text style={s.white}>레시피 {data.recipes.length} · Cafe 열기 →</Text></Pressable><View style={s.row}><Button quiet title="Cafe 수정" onPress={()=>go('createCafe')}/><Button title="＋ 새 레시피" onPress={create}/></View>{data.draft&&<Button quiet title={`초안 이어 쓰기 · ${data.draft.title||'제목 없음'}`} onPress={()=>go('editor','draft')}/>}<Text style={s.heading}>내가 올린 레시피</Text>{cards(data.recipes)}</>:<Button title="Cafe 만들기" onPress={create}/>}</>}
+        {!data.active?<><Text style={s.heading}>나만의 커피 기록을 시작해요</Text><Text style={s.muted}>만 14세 이상만 가입할 수 있으며, 시작하기 전에 필수 항목을 확인해 주세요.</Text>{registrationFields}{cloud&&appleLoginEnabled&&Platform.OS==='ios'&&<AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK} cornerRadius={8} style={[s.appleButton,(!onlineRegistrationReady||authBusy)&&s.disabled]} onPress={()=>{if(onlineRegistrationReady&&!authBusy)void signIn('apple');}}/>}{cloud&&<Button title="Google로 계속하기" disabled={!onlineRegistrationReady||authBusy} onPress={()=>void signIn('google')}/>} {localProfileEnabled&&<><Field value={name} onChange={setName} placeholder="사용할 이름"/><Button title="로컬 프로필로 시작" disabled={!name.trim()||!localRegistrationReady||authBusy} onPress={()=>void startLocalProfile()}/><Text style={s.small}>국외 이전에 동의하지 않아도 로컬 체험은 이용할 수 있습니다. 로컬 데이터는 이 기기에만 저장됩니다.</Text></>}</>:<><Text style={s.heading}>{data.name}님의 커피 공간</Text><Text style={s.small}>{session?'계정에 연결됨 · 온라인 저장':'로컬 프로필 · 이 기기에 저장'}</Text>
+          {data.cafe?<><Pressable style={[s.hero,{backgroundColor:data.cafe.color}]} onPress={()=>openCafe(data.cafe!.id)}><Text style={s.heroTitle}>{data.cafe.name}</Text><Text style={s.white}>@{data.cafe.handle}</Text><Text style={s.white}>{data.cafe.bio}</Text><Text style={s.white}>레시피 {data.recipes.length} · Cafe 열기 →</Text></Pressable><View style={s.row}><Button quiet title="Cafe 수정" onPress={()=>go('createCafe')}/><Button title="＋ 새 레시피" onPress={create}/></View>{seedContentEnabled&&session&&<Button quiet title="공식 초기 레시피 10개 등록" onPress={()=>void addOfficialSeedContent()}/>} {data.draft&&<Button quiet title={`초안 이어 쓰기 · ${data.draft.title||'제목 없음'}`} onPress={()=>go('editor','draft')}/>}<Text style={s.heading}>내가 올린 레시피</Text>{cards(data.recipes)}</>:<Button title="Cafe 만들기" onPress={create}/>}</>}
         <Text style={s.heading}>내 추출 기록</Text>{data.reviews.length?data.reviews.map(review=><View key={review.id} style={s.panel}><Text style={s.cardTitle}>{review.title}</Text><Text>{'★'.repeat(review.rating)} · {new Date(review.date).toLocaleDateString()}</Text><Text style={s.muted}>{review.note||'맛 메모 없음'}</Text></View>):<Text style={s.empty}>커피를 내리고 첫 맛 기록을 남겨 보세요.</Text>}
       </>}
       {route.screen==='cafe'&&cafe&&<>{header('Cafe')}<View style={[s.hero,{backgroundColor:cafe.color}]}><Text style={s.heroTitle}>{cafe.name}</Text><Text style={s.white}>@{cafe.handle}</Text><Text style={s.white}>{recipes.filter(r=>owner(r).id===cafe.id).length}개 레시피</Text></View><Button title={data.following.includes(cafe.id)?'팔로우 중 ✓':'팔로우'} onPress={()=>toggle('following',cafe.id)}/>{data.cafe?.id!==cafe.id&&uuid(cafe.id)&&<View style={s.row}><Button quiet title="Cafe 신고하기" onPress={()=>submitReport('cafe',cafe.id)}/><Button quiet title="Cafe 차단하기" onPress={()=>blockCafe(cafe.id)}/></View>}<View style={s.row}><Button quiet={cafeTab!=='레시피'} title="레시피" onPress={()=>setCafeTab('레시피')}/><Button quiet={cafeTab!=='소개'} title="소개" onPress={()=>setCafeTab('소개')}/></View>{cafeTab==='소개'?<Text style={s.muted}>{cafe.bio}</Text>:<><Button quiet title={latest?'최신순 ↓':'오래된 순 ↑'} onPress={()=>setLatest(x=>!x)}/>{cards(recipes.filter(r=>owner(r).id===cafe.id).sort((a,b)=>(latest?1:-1)*b.publishedAt.localeCompare(a.publishedAt)))}</>}</>}
@@ -353,6 +457,8 @@ const s=StyleSheet.create({
   button:{borderRadius:8,paddingVertical:13,paddingHorizontal:17,backgroundColor:orange,alignItems:'center',borderWidth:1,borderColor:orange},quiet:{backgroundColor:'transparent',borderColor:'#CFC2B3'},buttonText:{color:'#FFF9F1',fontWeight:'700',fontSize:13},
   textAction:{paddingVertical:8,borderBottomWidth:1,borderColor:'#A99786'},textActionLabel:{color:ink,fontSize:12,fontWeight:'700'},refreshLink:{alignSelf:'flex-end',paddingVertical:2},refreshLinkText:{color:'#817468',fontSize:11,borderBottomWidth:1,borderColor:'#CFC2B3'},
   input:{backgroundColor:'#FBF7F1',borderRadius:8,borderWidth:1,borderColor:'#D8CCBE',padding:15,fontSize:15,color:ink},hero:{backgroundColor:'#6C715C',borderRadius:10,padding:22,gap:13},heroTitle:{fontFamily:'Georgia',fontSize:31,lineHeight:39,color:'#FFF9F1'},white:{color:'#FFF9F1',fontWeight:'600',fontSize:13},
+  birthField:{gap:8},birthLabel:{fontSize:12,fontWeight:'700',color:ink},birthButton:{minHeight:54,flexDirection:'row',alignItems:'center',justifyContent:'space-between',backgroundColor:'#FBF7F1',borderRadius:8,borderWidth:1,borderColor:'#D8CCBE',paddingHorizontal:15},birthValue:{fontSize:16,fontWeight:'700',color:ink},birthPlaceholder:{fontSize:15,color:'#91867D'},birthIcon:{fontSize:18,color:orange},
+  dateBackdrop:{flex:1,justifyContent:'flex-end',backgroundColor:'rgba(43,36,31,.35)'},dateSheet:{backgroundColor:paper,borderTopLeftRadius:18,borderTopRightRadius:18,paddingHorizontal:18,paddingTop:16,paddingBottom:28},dateSheetHeader:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},dateCancel:{fontSize:14,color:'#786C61',paddingVertical:8},dateTitle:{fontFamily:'Georgia',fontSize:18,color:ink},dateDone:{fontSize:14,fontWeight:'800',color:orange,paddingVertical:8},dateSummary:{fontSize:22,fontWeight:'800',color:ink,textAlign:'center',marginTop:18,marginBottom:8},wheels:{flexDirection:'row',gap:8,height:220},wheelColumn:{flex:1},wheelLabel:{fontSize:11,fontWeight:'700',color:'#91867D',textAlign:'center',marginBottom:4},wheelWindow:{height:188,overflow:'hidden',position:'relative'},wheelSelection:{position:'absolute',left:2,right:2,top:72,height:44,borderRadius:10,backgroundColor:'#EFE4D7'},wheelContent:{paddingVertical:72},wheelItem:{height:44,alignItems:'center',justifyContent:'center'},wheelItemText:{fontSize:17,color:'#A2978D'},wheelItemSelected:{fontSize:19,fontWeight:'800',color:ink},
   featured:{height:306,borderRadius:10,overflow:'hidden',position:'relative',backgroundColor:'#6C715C'},featuredImage:{width:'100%',height:'100%'},featuredShade:{position:'absolute',top:0,right:0,bottom:0,left:0,backgroundColor:'rgba(32,25,20,.31)'},featuredCopy:{position:'absolute',left:20,right:20,bottom:20,gap:8},featuredEyebrow:{color:'#FFF9F1',fontSize:10,fontWeight:'800',letterSpacing:1.6},
   searchPrompt:{minHeight:50,flexDirection:'row',alignItems:'center',gap:10,borderBottomWidth:1,borderTopWidth:1,borderColor:'#D8CCBE',paddingHorizontal:2},searchPromptIcon:{fontSize:20,color:'#8B7B6E'},searchPromptText:{fontSize:14,color:'#8B7B6E'},
   searchField:{minHeight:52,flexDirection:'row',alignItems:'center',gap:9,backgroundColor:'#FBF7F1',borderRadius:8,borderWidth:1,borderColor:'#D8CCBE',paddingHorizontal:14},searchIcon:{fontSize:18,color:'#817468'},searchInput:{flex:1,minWidth:0,paddingVertical:13,fontSize:15,color:ink},

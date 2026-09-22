@@ -36,6 +36,7 @@ const demoRecipeAssets = {
 const EQUIPMENT_OPTIONS = ['V60', '오리가미', '에어로프레스'];
 const FLOW_LABELS = ['기본 정보', '재료·원두', '단계 추가', '최종 확인'];
 const SHOW_TEST_FILL = typeof __DEV__ !== 'undefined' && __DEV__;
+const VIDEO_UPLOAD_ENABLED = process.env.EXPO_PUBLIC_VIDEO_UPLOAD_ENABLED === 'true';
 
 function assetUri(asset: number): string {
   return Image.resolveAssetSource?.(asset)?.uri ?? '';
@@ -54,11 +55,13 @@ export type RecipeStep = {
   type: 'action' | 'timer';
   title: string;
   value: string;
-  media?: { type: 'image' | 'video'; uri: string; duration?: number };
+  media?: { type: 'image' | 'video'; uri: string; duration?: number; storagePath?: string; storageBucket?: 'recipe-media-private' | 'recipe-images' };
 };
 
 export type CreatorRecipe = {
   photo?: string;
+  photoStoragePath?: string;
+  photoStorageBucket?: 'recipe-media-private' | 'recipe-images';
   id: string;
   title: string;
   description: string;
@@ -365,6 +368,10 @@ export function CreateRecipeScreen({ cafe, onBack, onPublish, onDraft, initial, 
   }
   async function pickStepMedia(type: 'image' | 'video') {
     try {
+      if (type === 'video' && !VIDEO_UPLOAD_ENABLED) {
+        setError('영상 업로드는 개인정보 메타데이터 제거 기능을 준비한 뒤 제공할 예정이에요. 지금은 사진을 이용해 주세요.');
+        return;
+      }
       if (type === 'video') {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) return setError('영상을 선택하려면 사진 보관함 권한이 필요해요.');
@@ -471,7 +478,7 @@ export function CreateRecipeScreen({ cafe, onBack, onPublish, onDraft, initial, 
             {stepMedia&&<View style={styles.stepMediaPreview}>{stepMedia.type==='image'?<Image source={{uri:stepMedia.uri}} style={styles.stepMediaImage}/>:<View style={styles.stepVideoPreview}><Text style={styles.stepVideoIcon}>▶</Text><Text style={styles.stepVideoText}>짧은 영상 · {Math.ceil((stepMedia.duration??0)/1000)}초</Text></View>}<Pressable style={styles.stepMediaRemove} onPress={()=>setStepMedia(undefined)}><Text style={styles.stepMediaRemoveText}>제거</Text></Pressable></View>}
             <View style={styles.stepMediaButtons}>
               <Pressable style={styles.stepMediaButton} onPress={()=>void pickStepMedia('image')}><Text style={styles.stepMediaButtonText}>▣ 사진 추가</Text></Pressable>
-              <Pressable style={styles.stepMediaButton} onPress={()=>void pickStepMedia('video')}><Text style={styles.stepMediaButtonText}>▶ 30초 영상</Text></Pressable>
+              {VIDEO_UPLOAD_ENABLED&&<Pressable style={styles.stepMediaButton} onPress={()=>void pickStepMedia('video')}><Text style={styles.stepMediaButtonText}>▶ 30초 영상</Text></Pressable>}
             </View>
             <View style={styles.stepComposerBottom}>
               <TextInput style={styles.stepValueInput} value={stepValue} onChangeText={setStepValue} placeholder={stepType === 'action' ? '양 (선택)' : '예: 30초'} placeholderTextColor="#A69C94" />

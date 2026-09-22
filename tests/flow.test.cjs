@@ -8,10 +8,11 @@ const {spawnSync}=require('node:child_process');
 const ts=require('typescript');
 const React=require('react');
 const {create,act}=require('react-test-renderer');
+process.env.EXPO_PUBLIC_LOCAL_PROFILE_ENABLED='true';
 global.IS_REACT_ACT_ENVIRONMENT=true;
 const store=new Map(); let rejectSave=false;
 const native={};
-for(const name of ['KeyboardAvoidingView','Pressable','ScrollView','Image','Text','TextInput','View'])native[name]=name;
+for(const name of ['KeyboardAvoidingView','Pressable','ScrollView','Image','Modal','Text','TextInput','View'])native[name]=name;
 Object.assign(native,{Platform:{OS:'ios'},StyleSheet:{create:x=>x},Alert:{alert:()=>{}},Vibration:{vibrate:()=>{}},Share:{share:async()=>{}},Linking:{openURL:async()=>{}},BackHandler:{addEventListener:()=>({remove(){}})},AppState:{currentState:'active',addEventListener:()=>({remove(){}})}});
 const originalLoad=Module._load;
 Module._load=function(name,parent,main){
@@ -21,6 +22,7 @@ Module._load=function(name,parent,main){
   if(name==='expo-keep-awake')return {useKeepAwake:()=>{}};
   if(name==='expo-video')return {useVideoPlayer:()=>({}),VideoView:'VideoView'};
   if(name==='expo-image-picker')return {};
+  if(name==='expo-asset')return {Asset:{loadAsync:async()=>[]}};
   if(name==='expo-file-system')return {};
   if(name==='expo-crypto')return {getRandomBytesAsync:async()=>new Uint8Array(32),digestStringAsync:async()=>'',CryptoDigestAlgorithm:{SHA256:'SHA-256'}};
   if(name==='expo-apple-authentication')return {AppleAuthenticationButton:'AppleAuthenticationButton',AppleAuthenticationButtonType:{SIGN_IN:0},AppleAuthenticationButtonStyle:{BLACK:0},AppleAuthenticationScope:{FULL_NAME:0,EMAIL:1},signInAsync:async()=>({identityToken:'test-token'})};
@@ -44,7 +46,7 @@ const press=async label=>{
   await act(async()=>{await target.props.onPress();});
 };
 const input=async(placeholder,value)=>{const field=ui.root.findAll(x=>x.type==='TextInput'&&x.props.placeholder===placeholder)[0];assert.ok(field,placeholder);await act(async()=>field.props.onChangeText(value));};
-const completeConsent=async()=>{await input('생년월일 (YYYY-MM-DD)','1990-01-01');await press('이용약관에 동의합니다');await press('개인정보 수집·이용에 동의합니다');};
+const completeConsent=async()=>{await press('생년월일 선택');await press('선택 완료');await press('이용약관에 동의합니다');await press('개인정보 수집·이용에 동의합니다');};
 test('Apple login and required legal consent are exposed in the app',()=>{
   const source=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
   assert.match(source,/AppleAuthenticationButton/);
@@ -53,6 +55,9 @@ test('Apple login and required legal consent are exposed in the app',()=>{
   assert.match(source,/개인정보 수집·이용에 동의합니다/);
   assert.match(source,/개인정보 국외 이전에 동의합니다/);
   assert.match(source,/만 14세 이상만 가입/);
+  assert.match(source,/WheelColumn/);
+  assert.match(source,/snapToInterval/);
+  assert.doesNotMatch(source,/placeholder="생년월일 \(YYYY-MM-DD\)"/);
 });
 test('under-14 users are rejected and invalid dates do not pass',()=>{
   const now=new Date('2026-09-18T12:00:00Z');
@@ -60,6 +65,15 @@ test('under-14 users are rejected and invalid dates do not pass',()=>{
   assert.equal(isAtLeast14('2012-09-19',now),false);
   assert.equal(isAtLeast14('2012-02-31',now),false);
   assert.equal(isAtLeast14('not-a-date',now),false);
+});
+test('official seed content has ten valid recipes with varied step counts',()=>{
+  const {officialSeedRecipes}=require('../seed-recipes.ts');
+  const {validateRecipe,seconds}=require('../domain.ts');
+  const recipes=officialSeedRecipes('cafe-test');
+  assert.equal(recipes.length,10);
+  assert.deepEqual([...new Set(recipes.map(recipe=>recipe.steps.length))].sort(),[4,5,6,7]);
+  assert.ok(recipes.every(recipe=>validateRecipe(recipe)===null));
+  assert.equal(seconds('12시간'),43200);
 });
 test('release schema keeps reports private and account deletion waits for storage removal',()=>{
   const schema=fs.readFileSync(require.resolve('../supabase/migrations/20260918_release_readiness.sql'),'utf8');
@@ -125,11 +139,11 @@ test('support is directly reachable in-app and no advertising or tracking SDK is
   assert.doesNotMatch(pkg,/admob|tracking-transparency|facebook-sdk/i);
   assert.doesNotMatch(config,/NSUserTrackingUsageDescription|userTrackingPermission/i);
 });
-test('step photos and short videos are wired through editor, player and cloud upload',()=>{
+test('step photos are enabled and video upload is release-gated',()=>{
   const creator=fs.readFileSync(require.resolve('../creator.tsx'),'utf8');
   const app=fs.readFileSync(require.resolve('../CafeApp.tsx'),'utf8');
   const cloudSource=fs.readFileSync(require.resolve('../cloud.ts'),'utf8');
-  assert.match(creator,/사진 추가/);assert.match(creator,/30초 영상/);
+  assert.match(creator,/사진 추가/);assert.match(creator,/VIDEO_UPLOAD_ENABLED/);
   assert.match(app,/StepMediaView/);assert.match(app,/VideoView/);
   assert.match(cloudSource,/step\.media/);assert.match(cloudSource,/10\*1024\*1024/);
 });
@@ -165,7 +179,7 @@ test('create Cafe, publish, open actual recipe, save, brew, review and restore a
   await press('새 레시피');assert.ok(text(ui.toJSON()).includes('표지 사진 추가'));assert.ok(!text(ui.toJSON()).includes('예시로 빠르게 시작하기'));await input('예: 복숭아처럼 산뜻한 V60','테스트 커피');await input('이 레시피의 맛과 포인트를 알려주세요','내가 만든 추출');
   await press('재료와 원두 입력');assert.ok(text(ui.toJSON()).includes('기준 컵 사이즈'));
   await input('예: 프릳츠 아니 온두라스','케냐 키암부 AA');await input('예: 프릳츠','오후의 로스터스');
-  await press('단계 만들기');assert.ok(text(ui.toJSON()).includes('30초 영상'));assert.ok(text(ui.toJSON()).includes('단계 1 만들기'));
+  await press('단계 만들기');assert.ok(!text(ui.toJSON()).includes('30초 영상'));assert.ok(text(ui.toJSON()).includes('단계 1 만들기'));
   await input('설명 (선택) · 예: 물을 천천히 부어 주세요','커피를 준비해요');await press('이 단계 저장');assert.ok(text(ui.toJSON()).includes('단계 2 만들기'));
   await press('타이머 설정');await input('설명 (선택) · 예: 커피가 부풀기를 기다려요','잠시 기다려요');await input('예: 30초','1초');await press('이 단계 저장');
   await press('단계 입력 마치기');assert.ok(text(ui.toJSON()).includes('게시 전 확인'));await press('레시피 게시하기');

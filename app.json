@@ -12,13 +12,18 @@
     "ios": {
       "bundleIdentifier": "com.seungmunyou.caferecipes",
       "appleTeamId": "Q92RDJY668",
-      "buildNumber": "4",
+      "buildNumber": "5",
       "usesAppleSignIn": false,
       "supportsTablet": true
     },
     "android": {
       "package": "com.seungmunyou.caferecipes",
-      "versionCode": 3,
+      "versionCode": 7,
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#49230F",
         "foregroundImage": "./assets/android-icon-foreground.png",

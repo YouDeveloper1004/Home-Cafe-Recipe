@@ -13,11 +13,11 @@ pnpm typecheck
 
 ## 구현된 흐름
 
-- 비회원 탐색/추출, 이름으로 로컬 프로필 만들기
+- 비회원 탐색/추출, 내부 테스트 빌드의 로컬 프로필(출시 빌드에서는 비활성화)
 - Cafe 개설/수정, Cafe별 프로필 및 실제 소유 레시피 목록
 - 제목/설명/Cafe/도구 검색, 팔로우 피드, 저장 목록
 - 첫 화면에서 이름·설명·재료·필요 도구와 추천 원두 제품(로스터·원산지·가공 방식·사용량)을 작성한 뒤, 설명·사진·영상·타이머로 구성된 단계를 원하는 만큼 하나씩 추가하는 동적 등록 흐름
-- 레시피 표지 사진과 단계별 사진 또는 30초·10MB 이하 영상 첨부, 수행/대기 단계 추가/편집/삭제/순서 변경
+- 레시피 표지·단계 사진 첨부, 수행/대기 단계 추가/편집/삭제/순서 변경. 영상은 서버 메타데이터 제거 기능이 준비될 때까지 출시 빌드에서 비활성화
 - 초안 저장/재개, 게시/수정/삭제, 텍스트 공유
 - 게시 레시피의 실제 단계 실행, 연속 탭 방지, 이전 단계, 자동 타이머, 일시정지, 10초 추가, 건너뛰기, 진동, 화면 유지
 - 별점과 맛 기록, 재시작 복원, 저장 실패 처리
@@ -32,18 +32,18 @@ pnpm typecheck
 
 ## 온라인 연결
 
-Supabase 무료 프로젝트가 연결되어 있고 초기 스키마, 공개 이미지 버킷, RLS 정책과 저장 RPC가 적용되어 있습니다. Google OAuth 공급자와 앱 콜백도 활성화되어 있으며 Google OAuth 앱은 테스트 모드입니다. 비밀 키는 저장소가 아닌 `.env.local`에만 보관합니다.
+Supabase 무료 프로젝트가 연결되어 있고 초기 스키마, RLS 정책과 저장 RPC가 준비되어 있습니다. 새 미디어는 비공개 버킷에 저장하고 승인된 레시피의 파일에만 제한 시간 접근 주소를 발급합니다. Google OAuth 공급자와 앱 콜백도 활성화되어 있으며 Google OAuth 앱은 테스트 모드입니다. 비밀 키는 저장소가 아닌 `.env.local`에만 보관합니다.
 
 새 Supabase 프로젝트로 이전할 때만 다음 설정을 다시 수행합니다.
 
-1. 새 프로젝트는 `supabase/schema.sql`을 실행한 뒤 `supabase/migrations/20260918_moderation_privacy.sql`을 실행합니다. 기존 프로젝트는 `supabase/migrations/20260918_release_readiness.sql`, `supabase/migrations/20260918_moderation_privacy.sql` 순서로 SQL Editor에서 실행합니다.
+1. 새 프로젝트는 `supabase/schema.sql`을 실행한 뒤 날짜 순서대로 `supabase/migrations/`의 SQL을 실행합니다. 기존 프로젝트는 `20260918_release_readiness.sql` → `20260918_moderation_privacy.sql` → `20260921_private_media_hardening.sql` 순서로 SQL Editor에서 실행합니다.
 2. `.env.example`을 참고해 `.env.local`에 프로젝트 URL과 publishable key를 설정합니다. **service-role key는 앱에 넣지 않습니다.**
 3. Google OAuth 공급자를 등록하고 Supabase Site URL과 Redirect URL을 모두 `caferecipes://auth/callback`으로 설정합니다.
 4. 환경 변수를 적용해 Metro를 다시 시작하고 개발 빌드에서 인증을 검사합니다.
 
 Google은 PKCE로 인증하고 Apple은 네이티브 identity token을 Supabase에 전달합니다. 세션은 SecureStore에 저장합니다. 개인 상태는 본인만 조회할 수 있고, Cafe/게시 레시피는 공개 카탈로그에 분리됩니다. 신고는 작성자만 제출할 수 있고 일반 사용자는 조회할 수 없습니다. 차단 목록은 본인만 읽고 추가·삭제할 수 있습니다.
 
-사진과 단계 영상은 본인 UID 폴더에 업로드합니다. 이미지는 업로드 전에 JPEG로 재인코딩해 원본 EXIF 위치 메타데이터를 제거하고, 저장 후 현재 레시피에서 참조하지 않는 본인 폴더 파일을 정리합니다. Google 계정 삭제는 Storage API가 실제 파일을 지우고 계정과 연결 데이터를 삭제합니다. Apple 계정은 Face ID/Touch ID 재인증 후 Edge Function이 Apple 토큰을 해제하고 Storage와 Auth 계정을 삭제합니다. 중간에 실패하면 로컬 세션을 제거하지 않아 다시 시도할 수 있습니다.
+사진은 본인 UID 폴더의 비공개 버킷에 업로드합니다. 이미지는 업로드 전에 JPEG로 재인코딩해 원본 EXIF 위치 메타데이터를 제거합니다. 승인 전에는 작성자만 볼 수 있고, 승인된 레시피는 1시간짜리 서명 URL로 표시합니다. 계정당 최대 100개·250MB, 파일당 10MB로 제한하며 사용하지 않는 파일을 정리합니다. Google 계정 삭제는 Storage API가 실제 파일을 지우고 계정과 연결 데이터를 삭제합니다. Apple 계정은 Face ID/Touch ID 재인증 후 Edge Function이 Apple 토큰을 해제하고 두 Storage 버킷과 Auth 계정을 삭제합니다. 중간에 실패하면 로컬 세션을 제거하지 않아 다시 시도할 수 있습니다.
 
 ## Sign in with Apple 설정
 
@@ -89,4 +89,6 @@ Supabase 인증 설정, Google 공급자 활성화, OAuth 리디렉션, 공개 �
 
 출시 전 Google 테스트 모드 해제, Apple Provider·Edge Function secret 활성화, 두 계정 간 RLS, 사진 업로드, 신고·차단, 검토 승인·반려, Apple 토큰 해제, 계정 삭제 후 공개 URL 404를 실제 별도 테스트 계정으로 확인해야 합니다. 신고 검토·처리는 Supabase Dashboard에서 운영자가 수행합니다. 전체 제출 절차는 `release/app-store-connect-checklist.md`, 심사 메모 초안은 `release/app-review-notes.md`를 따릅니다. 공개 댓글과 추천 알고리즘은 포함하지 않았습니다. 맛 기록은 개인 기록입니다. 다중 기기 동시 편집은 마지막 저장 우선이며 충돌 처리는 별도 작업입니다.
 
-타이머는 앱 활성화 시 실제 경과 시간을 반영하며 백그라운드 알림/음성 안내는 포함하지 않습니다. 영상은 선택 단계에서 iOS 호환 중간 품질로 내보내지만, 출시 전 실제 기기에서 위치 메타데이터가 남지 않는지 표본 검사해야 합니다.
+타이머는 앱 활성화 시 실제 경과 시간을 반영하며 백그라운드 알림/음성 안내는 포함하지 않습니다. 출시 빌드는 `EXPO_PUBLIC_LOCAL_PROFILE_ENABLED=false`, `EXPO_PUBLIC_SEED_CONTENT_ENABLED=false`, `EXPO_PUBLIC_VIDEO_UPLOAD_ENABLED=false`를 강제합니다. Android 앱 백업과 overlay·녹음 권한도 차단합니다. 영상 업로드는 서버 측 트랜스코딩과 메타데이터 제거가 구현되고 검증되기 전까지 활성화하지 않습니다.
+
+오픈소스와 자산 출처는 `THIRD_PARTY_NOTICES.md`, `docs/asset-provenance.md`에 기록하며 AI 보조 개발 중 인간의 제품·보안 결정을 `docs/development-provenance.md`에 보존합니다.

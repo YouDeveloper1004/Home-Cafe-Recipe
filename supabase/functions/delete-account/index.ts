@@ -80,17 +80,20 @@ Deno.serve(async(req:Request)=>{
 
     const storedPaths=await userClient.rpc('cafe_account_storage_paths');
     if(storedPaths.error)throw storedPaths.error;
-    const names=(storedPaths.data??[]).map((row:{name:string})=>row.name);
-    for(let index=0;index<names.length;index+=100){
-      const removal=await admin.storage.from('recipe-images').remove(names.slice(index,index+100));
-      if(removal.error)throw removal.error;
+    const objects=(storedPaths.data??[]) as {bucket_id:string;name:string}[];
+    for(const bucket of ['recipe-media-private','recipe-images']){
+      const names=objects.filter(object=>object.bucket_id===bucket).map(object=>object.name);
+      for(let index=0;index<names.length;index+=100){
+        const removal=await admin.storage.from(bucket).remove(names.slice(index,index+100));
+        if(removal.error)throw removal.error;
+      }
     }
 
     const token=tokens.refresh_token??tokens.access_token!;
     await revokeAppleToken(token,tokens.refresh_token?'refresh_token':'access_token',clientId,secret);
     const deleted=await admin.auth.admin.deleteUser(user.id);
     if(deleted.error)throw deleted.error;
-    return response({deleted:true,removedStorageObjects:names.length});
+    return response({deleted:true,removedStorageObjects:objects.length});
   }catch(error){
     console.error('delete-account failed',error);
     return response({error:error instanceof Error?error.message:'Account deletion failed'},500);
